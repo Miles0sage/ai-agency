@@ -511,11 +511,9 @@ def process_task(task: dict) -> str:
             all_passed = False
             break
 
-        # Enhance execute stage with learning from past successes
-        if stage == "execute":
-            history_ctx = build_context_from_history(SUPABASE_URL, SUPABASE_KEY, task_type)
-            if history_ctx:
-                prompt = f"{history_ctx}\n\n---\n\n{prompt}"
+        # NOTE: Learning context temporarily disabled — was polluting prompts
+        # with stale model references causing failures.
+        # TODO: Re-enable once learning table is cleaned up.
 
         print(f"  [{stage}]", end=" ", flush=True)
         stage_result = process_stage(
@@ -544,7 +542,8 @@ def process_task(task: dict) -> str:
             final_model = stage_result["model_used"]
 
         if stage_result["success"]:
-            prev_output = stage_result["output"]
+            from litellm_gateway import strip_thinking_tags
+            prev_output = strip_thinking_tags(stage_result["output"])
             conf_str = f"conf={stage_result['confidence']:.0%}" if stage_result["confidence"] else ""
             print(f"ok {conf_str}")
         else:
