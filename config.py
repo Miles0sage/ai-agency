@@ -1,9 +1,12 @@
 """Centralized configuration. All env vars read here, nowhere else."""
 import os
 
-# ── Supabase (REQUIRED — no defaults, crash if missing) ──
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
+# ── Supabase ──
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    import warnings
+    warnings.warn("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. API will start but tasks will fail.")
 
 # ── LiteLLM Model Routing Table ──
 # Active routing — uses MiniMax (only working key right now)
@@ -19,6 +22,16 @@ MODEL_ROUTING = {
     "boilerplate": {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
     "research":    {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
     "fast":        {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+}
+
+# ── Model Fallback Chains ──
+# If primary model fails, try fallbacks in order
+MODEL_FALLBACKS = {
+    "minimax/MiniMax-M2.7": ["dashscope/qwen-turbo", "groq/llama-3.1-8b-instant"],
+    "deepseek/deepseek-chat": ["minimax/MiniMax-M2.7", "groq/llama-3.1-8b-instant"],
+    "openrouter/moonshot/kimi-k2.5": ["minimax/MiniMax-M2.7", "deepseek/deepseek-chat"],
+    "gemini/gemini-2.0-flash": ["minimax/MiniMax-M2.7", "deepseek/deepseek-chat"],
+    "groq/llama-3.1-8b-instant": ["minimax/MiniMax-M2.7", "dashscope/qwen-turbo"],
 }
 
 # ── Budget ──

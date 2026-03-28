@@ -65,6 +65,12 @@ def _get_provider_kwargs(model: str) -> dict:
     return {"model": model}
 
 
+def _is_retriable_provider_error(error: str) -> bool:
+    """Check if error is a provider-level issue (auth, unavailable) vs a content issue."""
+    retriable = ["AuthenticationError", "401", "403", "503", "rate_limit", "timeout", "connection"]
+    return any(keyword.lower() in error.lower() for keyword in retriable)
+
+
 def call_llm(
     prompt: str,
     system: str = "You are a helpful assistant.",
@@ -97,7 +103,41 @@ def call_llm(
             "cost_usd": round(cost_usd, 6),
         }
     except Exception as e:
+        error_str = str(e)
+
+        # Try fallback models if this is a provider error
+        if _is_retriable_provider_error(error_str):
+            from config import MODEL_FALLBACKS
+            fallbacks = MODEL_FALLBACKS.get(model, [])
+            for fallback_model in fallbacks:
+                try:
+                    fb_kwargs = _get_provider_kwargs(fallback_model)
+                    response = litellm_completion(
+                        **fb_kwargs,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": prompt},
+                        ],
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                    content = response.choices[0].message.content or ""
+                    content = strip_thinking_tags(content).strip()
+                    prompt_tokens = response.usage.prompt_tokens if response.usage else 0
+                    completion_tokens = response.usage.completion_tokens if response.usage else 0
+                    cost_in, cost_out = get_cost_for_model(fallback_model)
+                    cost_usd = (prompt_tokens * cost_in / 1_000_000) + (completion_tokens * cost_out / 1_000_000)
+                    print(f"  [fallback] {model} failed, used {fallback_model}")
+                    return {
+                        "success": True, "output": content, "error": "",
+                        "model": fallback_model,
+                        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+                        "cost_usd": round(cost_usd, 6),
+                    }
+                except Exception:
+                    continue  # try next fallback
+
         return {
-            "success": False, "output": "", "error": str(e), "model": model,
+            "success": False, "output": "", "error": error_str, "model": model,
             "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
         }
