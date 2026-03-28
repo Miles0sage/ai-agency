@@ -6,7 +6,6 @@ Also provides Supabase watchdog sweep for stuck tasks.
 """
 import hashlib
 import time
-import requests
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
@@ -77,20 +76,16 @@ class StuckDetector:
 
 
 def run_watchdog_sweep(supabase_url: str, supabase_key: str, timeout_seconds: int = 180):
-    """Sweep Supabase for tasks stuck in_progress with no subtask activity. Reset to failed."""
-    headers = {
-        "apikey": supabase_key,
-        "Authorization": f"Bearer {supabase_key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+    """Sweep Supabase for tasks stuck in_progress with no subtask activity. Reset to failed.
+
+    Accepts supabase_url and supabase_key params for backward compat,
+    but uses the shared supabase_client internally.
+    """
+    from supabase_client import sb_get, sb_patch
+
     try:
-        r = requests.get(
-            f"{supabase_url}/rest/v1/tasks?status=eq.in_progress&select=id,title,updated_at",
-            headers=headers, timeout=10,
-        )
-        tasks = r.json() if r.ok else []
-        if not isinstance(tasks, list):
+        tasks = sb_get("tasks?status=eq.in_progress&select=id,title,updated_at")
+        if not tasks:
             return []
 
         reset_tasks = []
@@ -107,18 +102,12 @@ def run_watchdog_sweep(supabase_url: str, supabase_key: str, timeout_seconds: in
 
             if age_seconds > timeout_seconds:
                 task_id = task["id"]
-                sr = requests.get(
-                    f"{supabase_url}/rest/v1/agency_subtasks?parent_task_id=eq.{task_id}&select=id&limit=1",
-                    headers=headers, timeout=10,
-                )
-                subtasks = sr.json() if sr.ok else []
-                if not isinstance(subtasks, list) or len(subtasks) == 0:
-                    requests.patch(
-                        f"{supabase_url}/rest/v1/tasks?id=eq.{task_id}",
-                        headers=headers,
-                        json={"status": "failed", "result": {"error": f"Watchdog: stuck {int(age_seconds)}s, 0 subtasks", "watchdog_reset": True}},
-                        timeout=10,
-                    )
+                subtasks = sb_get(f"agency_subtasks?parent_task_id=eq.{task_id}&select=id&limit=1")
+                if not subtasks:
+                    sb_patch("tasks", task_id, {
+                        "status": "failed",
+                        "result": {"error": f"Watchdog: stuck {int(age_seconds)}s, 0 subtasks", "watchdog_reset": True},
+                    })
                     reset_tasks.append(task_id)
                     print(f"[watchdog] Reset {task_id[:8]} ({task.get('title', '?')}) — {int(age_seconds)}s idle")
         return reset_tasks

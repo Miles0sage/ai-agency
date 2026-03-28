@@ -4,18 +4,10 @@ Self-improving learning system.
 Records task outcomes to Supabase and builds context from past successes
 to improve future executions.
 """
-import requests
 from datetime import datetime, timezone
 from typing import Optional
 
-
-def _headers(key: str) -> dict:
-    return {
-        "apikey": key,
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
+from supabase_client import sb_get, sb_post
 
 
 def record_outcome(
@@ -29,27 +21,22 @@ def record_outcome(
     success: bool,
     output_preview: str = "",
 ) -> Optional[dict]:
-    """Record a task outcome to the agency_learning table for future context."""
+    """Record a task outcome to the agency_learning table for future context.
+
+    Accepts supabase_url and supabase_key params for backward compat,
+    but uses the shared supabase_client internally.
+    """
     try:
-        r = requests.post(
-            f"{supabase_url}/rest/v1/agency_learning",
-            headers=_headers(supabase_key),
-            json={
-                "task_type": task_type,
-                "prompt_summary": prompt_summary[:500],
-                "model_used": model_used,
-                "confidence": round(confidence, 4),
-                "cost_usd": round(cost_usd, 6),
-                "success": success,
-                "output_preview": output_preview[:500],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            timeout=10,
-        )
-        result = r.json()
-        if isinstance(result, list) and result:
-            return result[0]
-        return result if isinstance(result, dict) else None
+        return sb_post("agency_learning", {
+            "task_type": task_type,
+            "prompt_summary": prompt_summary[:500],
+            "model_used": model_used,
+            "confidence": round(confidence, 4),
+            "cost_usd": round(cost_usd, 6),
+            "success": success,
+            "output_preview": output_preview[:500],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
     except Exception:
         return None
 
@@ -60,18 +47,17 @@ def get_past_successes(
     task_type: str,
     limit: int = 5,
 ) -> list:
-    """Fetch recent successful outcomes for a task_type from agency_learning."""
+    """Fetch recent successful outcomes for a task_type from agency_learning.
+
+    Accepts supabase_url and supabase_key params for backward compat,
+    but uses the shared supabase_client internally.
+    """
     try:
-        r = requests.get(
-            f"{supabase_url}/rest/v1/agency_learning"
-            f"?task_type=eq.{task_type}&success=eq.true"
+        return sb_get(
+            f"agency_learning?task_type=eq.{task_type}&success=eq.true"
             f"&order=created_at.desc&limit={limit}"
-            f"&select=prompt_summary,model_used,confidence,output_preview",
-            headers=_headers(supabase_key),
-            timeout=10,
+            f"&select=prompt_summary,model_used,confidence,output_preview"
         )
-        rows = r.json()
-        return rows if isinstance(rows, list) else []
     except Exception:
         return []
 

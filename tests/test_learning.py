@@ -4,12 +4,12 @@ from unittest.mock import patch, MagicMock
 
 def test_record_outcome_does_not_raise():
     """record_outcome is best-effort — should never raise."""
-    with patch("learning.requests.post", side_effect=Exception("fail")):
+    with patch("learning.sb_post", side_effect=Exception("fail")):
         record_outcome("http://fake", "key", "coding", "test", "model", 0.8, 0.001, True)
 
 
 def test_get_past_successes_returns_empty_on_error():
-    with patch("learning.requests.get", side_effect=Exception("fail")):
+    with patch("learning.sb_get", side_effect=Exception("fail")):
         result = get_past_successes("http://fake", "key", "coding")
         assert result == []
 

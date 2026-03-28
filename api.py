@@ -9,16 +9,10 @@ import requests
 import uuid
 
 from config import SUPABASE_URL, SUPABASE_KEY
+from supabase_client import HEADERS as H
 
 app = FastAPI(title="AI Agency", version="0.3.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-
-H = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
 
 
 class TaskIn(BaseModel):

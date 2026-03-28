@@ -15,7 +15,6 @@ Features ported from Segundo (ai-factory):
 import re
 import time
 import threading
-import requests
 from datetime import datetime, timezone
 from typing import Optional
 import random
@@ -29,6 +28,7 @@ from budget import BudgetEnforcer, BudgetExhaustedError
 from kill_switch import should_exit, install_signal_handlers
 from stuck_detector import StuckDetector, run_watchdog_sweep
 from learning import record_outcome, build_context_from_history
+from supabase_client import sb_get, sb_post, sb_patch
 
 # ── Config (non-secret, read from env with defaults) ─────────────────────────
 import os
@@ -42,45 +42,6 @@ ACCEPT_THRESHOLD     = 0.6   # >= accept output
 GOOD_THRESHOLD       = 0.8   # >= accept immediately, skip self-correct
 
 DEFAULT_DEPT = DEPARTMENTS["coding"]
-
-# ── Supabase helpers ───────────────────────────────────────────────────────────
-SB_HEADERS = {
-    "apikey": SUPABASE_KEY,
-    "Authorization": f"Bearer {SUPABASE_KEY}",
-    "Content-Type": "application/json",
-    "Prefer": "return=representation",
-}
-
-def sb_get(path: str) -> list:
-    try:
-        r = requests.get(f"{SUPABASE_URL}/rest/v1/{path}", headers=SB_HEADERS, timeout=10)
-        data = r.json()
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
-
-def sb_post(table: str, data: dict) -> Optional[dict]:
-    try:
-        r = requests.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=SB_HEADERS, json=data, timeout=10)
-        result = r.json()
-        if isinstance(result, list) and result:
-            return result[0]
-        return result if isinstance(result, dict) else None
-    except Exception:
-        return None
-
-def sb_patch(table: str, row_id: str, data: dict) -> Optional[dict]:
-    try:
-        r = requests.patch(
-            f"{SUPABASE_URL}/rest/v1/{table}?id=eq.{row_id}",
-            headers=SB_HEADERS, json=data, timeout=10
-        )
-        result = r.json()
-        if isinstance(result, list) and result:
-            return result[0]
-        return result if isinstance(result, dict) else None
-    except Exception:
-        return None
 
 # ── Thompson Sampling Bandit (ported from ai-factory/orchestrator.py) ─────────
 # Per-thread Random instance — avoids module-level state contention if concurrency added later
