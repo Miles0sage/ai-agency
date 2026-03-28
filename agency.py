@@ -226,6 +226,9 @@ def _has_function_or_class(output: str) -> bool:
     return any(re.search(p, output) for p in patterns)
 
 def _has_error_keywords(output: str) -> bool:
+    # Strip docstring "Raises:" sections to avoid false positives from documented exceptions
+    clean = re.sub(r'raises?:\s*\n.*?(?=\n\s*\n|\Z)', '', output, flags=re.IGNORECASE | re.DOTALL)
+    clean_lower = clean.lower()
     error_patterns = [
         r'traceback \(most recent',
         r'(?:syntax|type|name|key|index|value|import|runtime)error:',
@@ -234,8 +237,7 @@ def _has_error_keywords(output: str) -> bool:
         r'compilation? (?:error|failed)',
         r'(?:^|\n)\s*error[:\s]',
     ]
-    output_lower = output.lower()
-    return any(re.search(p, output_lower) for p in error_patterns)
+    return any(re.search(p, clean_lower) for p in error_patterns)
 
 def _calculate_intent_overlap(intent: str, output: str) -> float:
     intent_words = set(re.findall(r'\b\w+\b', intent.lower()))
@@ -665,12 +667,14 @@ def process_task(task: dict) -> str:
 
         total_cost += stage_result["cost"]
 
+        if stage == "execute":
+            # Always capture execute metrics regardless of success
+            final_confidence = stage_result["confidence"]
+            final_model = stage_result["model_used"]
+            final_tier  = stage_result["tier_used"]
+
         if stage_result["success"]:
             prev_output = stage_result["output"]
-            if stage == "execute":
-                final_confidence = stage_result["confidence"]
-                final_model = stage_result["model_used"]
-                final_tier  = stage_result["tier_used"]
             conf_str = f"conf={stage_result['confidence']:.0%}" if stage_result["confidence"] else ""
             print(f"✓ {conf_str}")
         else:
