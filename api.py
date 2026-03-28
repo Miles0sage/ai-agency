@@ -10,8 +10,17 @@ import uuid
 
 from config import SUPABASE_URL, SUPABASE_KEY
 from supabase_client import HEADERS as H
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="AI Agency", version="0.3.0")
+
+@asynccontextmanager
+async def lifespan(app):
+    from agency import start_background_loop
+    start_background_loop()
+    yield
+
+
+app = FastAPI(title="AI Agency", version="0.3.1", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
