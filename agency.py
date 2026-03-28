@@ -12,6 +12,7 @@ Features ported from Segundo (ai-factory):
   - StuckDetector loop detection
   - Kill switch graceful shutdown
 """
+import json
 import re
 import time
 import threading
@@ -563,17 +564,13 @@ def process_task(task: dict) -> str:
     )
 
     final_status = "completed" if all_passed else "review"
+    from litellm_gateway import strip_thinking_tags
+    clean_output = strip_thinking_tags(prev_output[:800]) if prev_output else ""
     sb_patch("tasks", task_id, {
         "status": final_status,
         "cost_usd": round(budget_enforcer.spent, 5),
-        "result": {
-            "department":       dept_name,
-            "model":            final_model,
-            "confidence_score": round(final_confidence, 3),
-            "all_passed":       all_passed,
-            "total_cost_usd":   round(budget_enforcer.spent, 5),
-            "output_preview":   prev_output[:800] if prev_output else "",
-        },
+        "result": clean_output,
+        "worker_used": final_model,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
     from discord_notify import notify_task_complete
@@ -610,7 +607,17 @@ def run_loop():
                     if should_exit():
                         print("[agency] Shutdown requested, exiting")
                         break
-                    process_task(task)
+                    try:
+                        process_task(task)
+                    except Exception as task_err:
+                        print(f"\n[agency] CRASH processing {task.get('id','?')[:8]}: {task_err}")
+                        try:
+                            sb_patch("tasks", task["id"], {
+                                "status": "failed",
+                                "result": json.dumps({"error": f"Worker crash: {str(task_err)[:500]}"}),
+                            })
+                        except Exception:
+                            pass
                 consecutive_errors = 0
 
                 # Watchdog sweep after processing batch
