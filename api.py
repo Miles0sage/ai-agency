@@ -33,9 +33,12 @@ def create_task(t: TaskIn):
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.text)
 
-    # Dispatch to Celery worker
-    from celery_app import app as celery
-    celery.send_task("celery_app.process_task_async", args=[data])
+    # Dispatch to Celery worker (falls back to pending queue if Redis unavailable)
+    try:
+        from celery_app import app as celery
+        celery.send_task("celery_app.process_task_async", args=[data])
+    except Exception:
+        pass  # Task stays pending — background worker or Celery will pick it up
 
     return r.json()
 
@@ -195,9 +198,12 @@ def webhook_trigger(source: str, payload: dict):
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.text)
 
-    # Dispatch to Celery
-    from celery_app import app as celery
-    celery.send_task("celery_app.process_task_async", args=[data])
+    # Dispatch to Celery (falls back to pending queue if Redis unavailable)
+    try:
+        from celery_app import app as celery
+        celery.send_task("celery_app.process_task_async", args=[data])
+    except Exception:
+        pass
 
     return {"status": "created", "task_id": task_id, "source": source}
 
