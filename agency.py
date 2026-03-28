@@ -329,6 +329,8 @@ def _call_dashscope(model: str, system: str, user: str, max_tokens: int = 2000) 
         if r.status_code == 200:
             data = r.json()
             content = data["choices"][0]["message"]["content"]
+            # Strip <think>...</think> reasoning blocks — qwen3 models emit these
+            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
             return {"success": True, "output": content, "error": ""}
         return {"success": False, "output": "", "error": f"HTTP {r.status_code}: {r.text[:300]}"}
     except Exception as e:
