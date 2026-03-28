@@ -28,6 +28,17 @@ MAX_TASK_BUDGET_USD = float(os.environ.get("MAX_TASK_BUDGET_USD", "0.10"))
 WATCHDOG_POLL_INTERVAL = int(os.environ.get("WATCHDOG_POLL_INTERVAL", "30"))
 STUCK_TIMEOUT_SECONDS = int(os.environ.get("STUCK_TIMEOUT_SECONDS", "180"))
 
+# ── Browser ──
+ENABLE_BROWSER = os.environ.get("ENABLE_BROWSER", "false").lower() == "true"
+
+# ── Redis / Celery ──
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+# ── Worker ──
+POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL", "20"))
+MAX_RETRIES = int(os.environ.get("MAX_STAGE_RETRIES", "3"))
+MAX_SUBTASKS = int(os.environ.get("MAX_DECOMPOSED_SUBTASKS", "5"))
+
 # ── SOP ──
 SOP_STAGES = ["requirements", "plan", "execute", "verify", "deliver"]
 

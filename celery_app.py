@@ -3,11 +3,9 @@ Celery app — task queue with hard kill support.
 Hard kill: app.control.revoke(task_id, terminate=True, signal='SIGKILL')
 Watchdog runs as periodic Celery Beat task.
 """
-import os
 from celery import Celery
+from config import REDIS_URL
 from kill_switch import install_signal_handlers
-
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
 
 def make_celery() -> Celery:

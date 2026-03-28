@@ -22,6 +22,7 @@ import random
 from config import (
     SUPABASE_URL, SUPABASE_KEY, SOP_STAGES, DEPARTMENTS,
     MAX_TASK_BUDGET_USD, STUCK_TIMEOUT_SECONDS,
+    POLL_INTERVAL, MAX_RETRIES, MAX_SUBTASKS,
 )
 from litellm_gateway import call_llm, get_model_for_task
 from budget import BudgetEnforcer, BudgetExhaustedError
@@ -30,11 +31,6 @@ from stuck_detector import StuckDetector, run_watchdog_sweep
 from learning import record_outcome, build_context_from_history
 from supabase_client import sb_get, sb_post, sb_patch
 
-# ── Config (non-secret, read from env with defaults) ─────────────────────────
-import os
-POLL_INTERVAL   = int(os.environ.get("POLL_INTERVAL", "20"))
-MAX_RETRIES     = int(os.environ.get("MAX_STAGE_RETRIES", "3"))
-MAX_SUBTASKS    = int(os.environ.get("MAX_DECOMPOSED_SUBTASKS", "5"))
 
 # Ralph Gate thresholds (ported from ai-factory/ralph_gate.py)
 CONFIDENCE_THRESHOLD = 0.7
@@ -391,6 +387,18 @@ def process_stage(
         pass
 
     p = stage_prompt(stage, title, prompt, prev_output)
+
+    # Browser-enhance research execute stage
+    if stage == "execute" and task_type == "research":
+        from config import ENABLE_BROWSER
+        if ENABLE_BROWSER:
+            from browser_agent import web_fetch
+            import requests as _req
+            search_url = f"https://html.duckduckgo.com/html/?q={_req.utils.quote(title)}"
+            fetch_result = web_fetch(search_url, extract_text=True)
+            if fetch_result["success"] and fetch_result["output"]:
+                web_context = fetch_result["output"][:2000]
+                p = f"Web research results:\n{web_context}\n\n---\n\n{p}"
 
     # Execute stage: full Quality Gate cascade + bandit routing
     if stage == "execute":
