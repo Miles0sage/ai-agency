@@ -111,7 +111,9 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.3.1"}
+    from config import MODEL_ROUTING
+    default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
+    return {"status": "ok", "version": "0.3.2", "default_model": default_model, "commit": "c5439c5"}
 
 
 @app.get("/.well-known/agent.json")
