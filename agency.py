@@ -41,9 +41,9 @@ SOP_STAGES = ["requirements", "plan", "execute", "verify", "deliver"]
 # ── Quality Gate Tiers (ported from ai-factory/quality_gate.py) ───────────────
 # Tier 1: cheap fast, Tier 2: balanced, Tier 3: best quality
 TIERS = {
-    1: {"model": "qwen-turbo",      "cost": 0.0002},
-    2: {"model": "qwen-plus",       "cost": 0.0005},
-    3: {"model": "qwen-coder-plus", "cost": 0.0008},
+    1: {"model": "qwen3.5-plus",    "cost": 0.0002},
+    2: {"model": "qwen3.5-plus",    "cost": 0.0005},
+    3: {"model": "qwen3-coder-plus","cost": 0.0008},
 }
 
 # Which tiers to use per task_type (start_tier, max_tier)
@@ -59,31 +59,31 @@ TIER_RANGES = {
 DEPARTMENTS = {
     "coding": {
         "name": "Engineering",
-        "default_model": "qwen-coder-plus",
+        "default_model": "qwen3-coder-plus",
         "system": "You are a senior software engineer. Write clean, tested, production-ready code with error handling and type hints.",
         "confidence_type": "coding",
     },
     "research": {
         "name": "Research",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.5-plus",
         "system": "You are a research analyst. Provide thorough, well-structured analysis with clear conclusions and actionable insights.",
         "confidence_type": "research",
     },
     "writing": {
         "name": "Writing",
-        "default_model": "qwen-turbo",
+        "default_model": "qwen3.5-plus",
         "system": "You are a professional content writer. Produce clear, engaging, well-structured content tailored to the audience.",
         "confidence_type": "writing",
     },
     "qa": {
         "name": "QA",
-        "default_model": "qwen-plus",
+        "default_model": "qwen3.5-plus",
         "system": "You are a QA engineer. Find bugs, edge cases, quality issues. Provide specific, actionable test cases and verification steps.",
         "confidence_type": "review",
     },
     "marketing": {
         "name": "Marketing",
-        "default_model": "qwen-turbo",
+        "default_model": "qwen3.5-plus",
         "system": "You are a growth marketer. Write compelling copy and strategies that drive conversions and engagement.",
         "confidence_type": "writing",
     },
@@ -482,7 +482,7 @@ def decompose_task(task: dict) -> list:
         "Respond with ONLY a JSON array: [{\"title\":\"...\",\"prompt\":\"...\",\"task_type\":\"...\"}]"
     )
     result = _call_dashscope(
-        "qwen-plus", system,
+        "qwen3.5-plus", system,
         f"Split this task:\n\nTitle: {task['title']}\nPrompt: {task.get('prompt','')}",
         max_tokens=1000
     )
@@ -540,7 +540,7 @@ def process_stage(
         tier_used  = gate_result["tier_used"]
     else:
         # Non-execute stages: pick model via bandit, single call
-        model = get_best_model(task_type, [dept["default_model"], "qwen-turbo"])
+        model = get_best_model(task_type, [dept["default_model"], "qwen3.5-plus"])
         cost_per_call = next(
             (TIERS[t]["cost"] for t in TIERS if TIERS[t]["model"] == model),
             0.0005
