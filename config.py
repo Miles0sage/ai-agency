@@ -9,14 +9,13 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     warnings.warn("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. API will start but tasks will fail.")
 
 # ── LiteLLM Model Routing Table ──
-# Active routing — uses DashScope/Qwen (confirmed working)
-# MiniMax kept as fallback. Restore multi-provider when more keys added.
+# Active routing — MiniMax confirmed working (DashScope key expired)
 MODEL_ROUTING = {
-    "default":     {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
-    "coding":      {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
-    "boilerplate": {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
-    "research":    {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
-    "fast":        {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
+    "default":     {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "coding":      {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "boilerplate": {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "research":    {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "fast":        {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
 }
 
 # ── Model Fallback Chains ──

@@ -13,10 +13,12 @@ litellm.set_verbose = False
 
 
 def strip_thinking_tags(text: str) -> str:
-    # Greedy strip to handle nested/malformed think tags, then clean any orphaned openers
-    text = re.sub(r'<think>.*</think>', '', text, flags=re.DOTALL)
-    text = re.sub(r'<think>.*', '', text, flags=re.DOTALL)
-    return text
+    # Strip all <think>...</think> blocks (non-greedy to preserve content between blocks)
+    while '<think>' in text and '</think>' in text:
+        text = re.sub(r'<think>.*?</think>', '', text, count=1, flags=re.DOTALL)
+    # Remove orphaned <think> with no closing tag (model cut off mid-thinking)
+    text = re.sub(r'<think>.*$', '', text, flags=re.DOTALL)
+    return text.strip()
 
 
 def get_model_for_task(task_type: str) -> str:
@@ -79,7 +81,7 @@ def call_llm(
     system: str = "You are a helpful assistant.",
     task_type: str = "default",
     model_override: Optional[str] = None,
-    max_tokens: int = 2000,
+    max_tokens: int = 4000,
     temperature: float = 0.3,
 ) -> dict:
     model = model_override or get_model_for_task(task_type)
