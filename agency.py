@@ -286,9 +286,10 @@ def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding"
         )
     elif conf_type == "research":
         score = (
-            (0.30 if len(output) > 200 else len(output) / 200 * 0.30) +
-            (0.30 if _has_citations(output) else 0.15) +  # partial credit even without citations
-            0.40 * max(_calculate_intent_overlap(task_intent, output), 0.3)  # floor at 0.3
+            0.35 * _output_is_substantial(output, 150) +
+            (0.25 if _output_has_structure(output) else 0.10) +
+            (0.20 if _has_citations(output) else 0.10) +
+            (0.0  if _has_error_keywords(output) else 0.20)
         )
     elif conf_type == "review":
         # QA/review: structural signals only — output vocabulary won't match meta-instruction
