@@ -252,10 +252,26 @@ def _has_actionable_items(output: str) -> bool:
     return any(re.search(p, output.lower()) for p in patterns)
 
 
+def _output_has_structure(output: str) -> bool:
+    """Check if output has multi-paragraph or list structure (good writing signal)."""
+    return (output.count('\n') >= 3 or
+            bool(re.search(r'^\s*[-*•]\s', output, re.MULTILINE)) or
+            bool(re.search(r'^\s*\d+[.)]\s', output, re.MULTILINE)))
+
+def _output_is_substantial(output: str, min_chars: int = 150) -> float:
+    """0-1 score for output length — partial credit for shorter outputs."""
+    return min(1.0, len(output.strip()) / min_chars)
+
+
 def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding") -> float:
     """
     Evaluate confidence in AI output 0-1 based on task_type signals.
     Ported from ai-factory/ralph_gate.py — evaluate_confidence().
+
+    Note: intent_overlap is only used for coding/research where the output
+    domain vocabulary should match the task description. For writing/marketing/QA,
+    structural quality signals are used instead — creative outputs inherently
+    don't share vocabulary with the instruction that produced them.
     """
     if not output or not output.strip():
         return 0.0
@@ -271,20 +287,22 @@ def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding"
     elif conf_type == "research":
         score = (
             (0.30 if len(output) > 200 else len(output) / 200 * 0.30) +
-            (0.30 if _has_citations(output) else 0.0) +
-            0.40 * _calculate_intent_overlap(task_intent, output)
+            (0.30 if _has_citations(output) else 0.15) +  # partial credit even without citations
+            0.40 * max(_calculate_intent_overlap(task_intent, output), 0.3)  # floor at 0.3
         )
     elif conf_type == "review":
+        # QA/review: structural signals only — output vocabulary won't match meta-instruction
         score = (
-            (0.30 if _has_specific_findings(output) else 0.0) +
-            (0.30 if _has_actionable_items(output)   else 0.0) +
-            0.40 * _calculate_intent_overlap(task_intent, output)
+            0.30 * _output_is_substantial(output, 200) +
+            (0.30 if _has_specific_findings(output) or _has_actionable_items(output) else 0.15) +
+            (0.25 if _output_has_structure(output) else 0.0) +
+            (0.0  if _has_error_keywords(output) else 0.15)
         )
-    else:  # writing / marketing
+    else:  # writing / marketing — structural quality, not intent overlap
         score = (
-            (0.30 if len(output) > 100 else len(output) / 100 * 0.30) +
-            (0.0  if _has_error_keywords(output) else 0.20) +
-            0.50 * _calculate_intent_overlap(task_intent, output)
+            0.35 * _output_is_substantial(output, 150) +
+            (0.30 if _output_has_structure(output) else 0.10) +
+            (0.0  if _has_error_keywords(output)   else 0.35)
         )
 
     return max(0.0, min(1.0, score))
