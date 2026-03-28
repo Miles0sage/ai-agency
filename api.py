@@ -5,8 +5,13 @@ from pydantic import BaseModel
 import requests
 import os
 
-app = FastAPI(title="AI Agency", version="0.1.0")
+app = FastAPI(title="AI Agency", version="0.2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+@app.on_event("startup")
+def _start_worker():
+    from agency import start_background_loop
+    start_background_loop()
 
 SB_URL = os.environ.get("SUPABASE_URL", "https://upximucxncuajnakylyf.supabase.co")
 SB_KEY = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVweGltdWN4bmN1YWpuYWt5bHlmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjcyODUxOCwiZXhwIjoyMDgyMzA0NTE4fQ.VlzvndBY3Bs77zm8ZazERiFBlay2AEzqSpLGHu5BEaM"))
