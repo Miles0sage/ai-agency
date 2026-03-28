@@ -8,30 +8,32 @@ Features ported from Segundo (ai-factory):
   - 5-stage SOP pipeline with reviewer loop
   - Task decomposition for complex tasks (Devin <30min rule)
   - Per-task budget cap enforcement
+  - BudgetEnforcer reserve/commit pattern
+  - StuckDetector loop detection
+  - Kill switch graceful shutdown
 """
 import re
 import time
-import os
 import threading
 import requests
 from datetime import datetime, timezone
 from typing import Optional
 import random
 
-# ── Config ─────────────────────────────────────────────────────────────────────
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://upximucxncuajnakylyf.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_KEY",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVweGltdWN4bmN1YWpuYWt5bHlmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NjcyODUxOCwiZXhwIjoyMDgyMzA0NTE4fQ.VlzvndBY3Bs77zm8ZazERiFBlay2AEzqSpLGHu5BEaM"))
+from config import (
+    SUPABASE_URL, SUPABASE_KEY, SOP_STAGES, DEPARTMENTS,
+    MAX_TASK_BUDGET_USD, STUCK_TIMEOUT_SECONDS,
+)
+from litellm_gateway import call_llm, get_model_for_task
+from budget import BudgetEnforcer, BudgetExhaustedError
+from kill_switch import should_exit, install_signal_handlers
+from stuck_detector import StuckDetector, run_watchdog_sweep
+from learning import record_outcome, build_context_from_history
 
-DASHSCOPE_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-sp-7424af93156c47fb94a524398af5f43e")
-DASHSCOPE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions"
-
-MINIMAX_KEY = os.environ.get("MINIMAX_API_KEY", "sk-cp-5cmx4OmXEq3yfUV6TjDUcIac--MLy-zKxuCTgwscz0FCqzOwGLnlGrQ4cIevAF1DRqRupwokrirf3_jEdZqqS9EMKMuivy3JfmVjqZUFg3BDGa4_KsEqii0")
-MINIMAX_URL  = "https://api.minimax.io/v1/chat/completions"
-
+# ── Config (non-secret, read from env with defaults) ─────────────────────────
+import os
 POLL_INTERVAL   = int(os.environ.get("POLL_INTERVAL", "20"))
 MAX_RETRIES     = int(os.environ.get("MAX_STAGE_RETRIES", "3"))
-MAX_TASK_BUDGET = float(os.environ.get("MAX_TASK_BUDGET_USD", "0.10"))
 MAX_SUBTASKS    = int(os.environ.get("MAX_DECOMPOSED_SUBTASKS", "5"))
 
 # Ralph Gate thresholds (ported from ai-factory/ralph_gate.py)
@@ -39,63 +41,6 @@ CONFIDENCE_THRESHOLD = 0.7
 ACCEPT_THRESHOLD     = 0.6   # >= accept output
 GOOD_THRESHOLD       = 0.8   # >= accept immediately, skip self-correct
 
-SOP_STAGES = ["requirements", "plan", "execute", "verify", "deliver"]
-
-# ── Quality Gate Tiers — openclaw worker fleet ────────────────────────────────
-# Mirrors openclaw agent roster: kimi (cheap), qwen-coder (specialist), minimax (elite)
-TIERS = {
-    1: {"model": "kimi-k2.5",       "provider": "alibaba", "cost": 0.0003},
-    2: {"model": "qwen3-coder-plus", "provider": "alibaba", "cost": 0.0008},
-    3: {"model": "MiniMax-M2.7",    "provider": "minimax", "cost": 0.0015},
-}
-
-# Which tiers to use per task_type (start_tier, max_tier)
-TIER_RANGES = {
-    "coding":    (1, 3),
-    "research":  (1, 2),
-    "writing":   (1, 1),
-    "qa":        (1, 2),
-    "marketing": (1, 1),
-}
-
-# ── Departments ───────────────────────────────────────────────────────────────
-DEPARTMENTS = {
-    "coding": {
-        "name": "Engineering",
-        "default_model": "kimi-k2.5",
-        "provider": "alibaba",
-        "system": "You are a senior software engineer. Write clean, tested, production-ready code with error handling and type hints.",
-        "confidence_type": "coding",
-    },
-    "research": {
-        "name": "Research",
-        "default_model": "MiniMax-M2.7",
-        "provider": "minimax",
-        "system": "You are a research analyst. Provide thorough, well-structured analysis with clear conclusions and actionable insights.",
-        "confidence_type": "research",
-    },
-    "writing": {
-        "name": "Writing",
-        "default_model": "kimi-k2.5",
-        "provider": "alibaba",
-        "system": "You are a professional content writer. Produce clear, engaging, well-structured content tailored to the audience.",
-        "confidence_type": "writing",
-    },
-    "qa": {
-        "name": "QA",
-        "default_model": "kimi-k2.5",
-        "provider": "alibaba",
-        "system": "You are a QA engineer. Find bugs, edge cases, quality issues. Provide specific, actionable test cases and verification steps.",
-        "confidence_type": "review",
-    },
-    "marketing": {
-        "name": "Marketing",
-        "default_model": "kimi-k2.5",
-        "provider": "alibaba",
-        "system": "You are a growth marketer. Write compelling copy and strategies that drive conversions and engagement.",
-        "confidence_type": "writing",
-    },
-}
 DEFAULT_DEPT = DEPARTMENTS["coding"]
 
 # ── Supabase helpers ───────────────────────────────────────────────────────────
@@ -153,7 +98,7 @@ _BANDIT_LOCK = threading.Lock()
 def thompson_sample(successes: int, failures: int) -> float:
     """
     Draw a sample from Beta(alpha, beta) distribution.
-    Higher successes → higher expected value → model gets picked more.
+    Higher successes -> higher expected value -> model gets picked more.
     Uses per-thread Random instance for thread safety.
     Ported from ai-factory/orchestrator.py (betavariate replaces manual Gamma approx).
     """
@@ -198,7 +143,7 @@ def get_best_model(task_type: str, candidates: list[str]) -> str:
     Candidates with no history default to 50% (equal exploration).
     """
     if not candidates:
-        return DEPARTMENTS.get(task_type, DEFAULT_DEPT)["default_model"]
+        return get_model_for_task(task_type)
 
     best_model = candidates[0]
     best_score = -1.0
@@ -265,7 +210,7 @@ def _has_actionable_items(output: str) -> bool:
 def _output_has_structure(output: str) -> bool:
     """Check if output has multi-paragraph or list structure (good writing signal)."""
     return (output.count('\n') >= 3 or
-            bool(re.search(r'^\s*[-*•]\s', output, re.MULTILINE)) or
+            bool(re.search(r'^\s*[-*\u2022]\s', output, re.MULTILINE)) or
             bool(re.search(r'^\s*\d+[.)]\s', output, re.MULTILINE)))
 
 def _output_is_substantial(output: str, min_chars: int = 150) -> float:
@@ -286,7 +231,14 @@ def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding"
     if not output or not output.strip():
         return 0.0
 
-    conf_type = DEPARTMENTS.get(task_type, DEFAULT_DEPT).get("confidence_type", "coding")
+    # Map task_type to confidence type via department config
+    dept = DEPARTMENTS.get(task_type, DEFAULT_DEPT)
+    # Departments no longer carry confidence_type; derive from task_type
+    conf_type_map = {
+        "coding": "coding", "research": "research", "qa": "review",
+        "writing": "writing", "marketing": "writing",
+    }
+    conf_type = conf_type_map.get(task_type, "coding")
 
     if conf_type == "coding":
         score = (
@@ -319,45 +271,6 @@ def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding"
     return max(0.0, min(1.0, score))
 
 
-# ── AI call ────────────────────────────────────────────────────────────────────
-def _call_worker(model: str, system: str, user: str, max_tokens: int = 2000, provider: str = "alibaba") -> dict:
-    """Unified LLM call — routes to Alibaba DashScope or MiniMax based on provider."""
-    if provider == "minimax":
-        url = MINIMAX_URL
-        key = MINIMAX_KEY
-    else:
-        url = DASHSCOPE_URL
-        key = DASHSCOPE_KEY
-    try:
-        r = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": user},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": 0.3,
-            },
-            timeout=120,
-        )
-        if r.status_code == 200:
-            data = r.json()
-            content = data["choices"][0]["message"]["content"]
-            # Strip <think>...</think> reasoning blocks emitted by kimi/qwen3/minimax
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-            return {"success": True, "output": content, "error": ""}
-        return {"success": False, "output": "", "error": f"HTTP {r.status_code}: {r.text[:300]}"}
-    except Exception as e:
-        return {"success": False, "output": "", "error": str(e)}
-
-# Keep old name as alias for any callers
-def _call_dashscope(model: str, system: str, user: str, max_tokens: int = 2000) -> dict:
-    return _call_worker(model, system, user, max_tokens, provider="alibaba")
-
-
 # ── Quality Gate: tiered execute with escalation ───────────────────────────────
 
 def execute_with_quality_gate(
@@ -367,110 +280,76 @@ def execute_with_quality_gate(
     budget_remaining: float,
 ) -> dict:
     """
-    Run execute stage through tiered quality gate cascade.
-    Ported from ai-factory/quality_gate.py pattern.
+    Run execute stage through quality gate with self-correction and escalation.
+    Uses call_llm for all LLM calls. Bandit selects initial model.
 
-    Tier 1 (cheap) → confidence score → escalate if <0.6 → Tier 2 → Tier 3
-    Score 0.6-0.8 → self-correct at same tier first.
-    Score >=0.8 → accept immediately.
+    Attempt 1 -> confidence score -> self-correct if 0.6-0.8 -> escalate if <0.6
+    Score >=0.8 -> accept immediately.
 
-    Returns: {success, output, cost, confidence, tier_used, model_used}
+    Returns: {success, output, cost_usd, confidence, model_used}
     """
-    start_tier, max_tier = TIER_RANGES.get(task_type, (1, 3))
-    tier_history = []
+    system = dept["system"]
+    task_route = dept.get("route", "default")
+
+    # Use bandit to pick best model from available routes
+    default_model = get_model_for_task(task_type)
+    model = get_best_model(task_type, [default_model])
+
     total_cost = 0.0
     current_prompt = prompt
+    best_result = None
+    best_confidence = 0.0
 
-    # Use bandit to pick best model — candidates are all models in scope
-    candidate_models = list({TIERS[t]["model"] for t in range(start_tier, max_tier + 1)})
-    bandit_model = get_best_model(task_type, candidate_models)
-
-    for tier in range(start_tier, max_tier + 1):
+    # Up to 2 attempts: initial + self-correction or escalation
+    for attempt in range(2):
         if total_cost >= budget_remaining:
             break
 
-        # Use bandit-selected model for first tier, escalate linearly after
-        if tier == start_tier:
-            model = bandit_model
-            tier_entry = next((TIERS[t] for t in TIERS if TIERS[t]["model"] == model), TIERS[tier])
-            model_cost = tier_entry["cost"]
-            provider = tier_entry["provider"]
-        else:
-            model = TIERS[tier]["model"]
-            model_cost = TIERS[tier]["cost"]
-            provider = TIERS[tier]["provider"]
-
-        system = dept["system"]
-
-        # Inject previous tier failure context for escalation
-        if tier_history:
-            prev = tier_history[-1]
-            current_prompt = (
-                f"A previous model ({prev['model']}, confidence={prev['confidence']:.0%}) "
-                f"attempted this but was insufficient.\n\n"
-                f"ORIGINAL TASK:\n{prompt}\n\n"
-                f"PREVIOUS OUTPUT:\n{prev['output'][:1500]}\n\n"
-                f"Please produce a better, complete, correct solution."
-            )
-
-        # Attempt 1
-        result = _call_worker(model, system, current_prompt, provider=provider)
-        total_cost += model_cost
+        result = call_llm(current_prompt, system=system, task_type=task_type, model_override=model)
+        total_cost += result.get("cost_usd", 0)
 
         if not result["success"]:
-            tier_history.append({"tier": tier, "model": model, "confidence": 0.0,
-                                  "output": result["error"], "success": False})
             update_bandit(model, task_type, False)
-            continue
+            if not best_result:
+                best_result = result
+            break
 
         confidence = evaluate_confidence(prompt, result["output"], task_type)
 
-        # Self-correction if in middle band (0.6-0.8)
-        if ACCEPT_THRESHOLD <= confidence < GOOD_THRESHOLD and total_cost < budget_remaining:
-            sc_prompt = (
-                f"{current_prompt}\n\n"
+        if confidence > best_confidence:
+            best_confidence = confidence
+            best_result = result
+
+        # Excellent — accept immediately
+        if confidence >= GOOD_THRESHOLD:
+            update_bandit(model, task_type, True)
+            break
+
+        # Acceptable but not great — self-correct
+        if ACCEPT_THRESHOLD <= confidence < GOOD_THRESHOLD and attempt == 0:
+            update_bandit(model, task_type, confidence >= CONFIDENCE_THRESHOLD)
+            current_prompt = (
+                f"{prompt}\n\n"
                 f"--- SELF-CORRECTION (confidence={confidence:.0%}) ---\n"
                 f"Your output was partially acceptable but needs improvement. "
                 f"Please fix and resubmit a complete, high-quality answer."
             )
-            sc_result = _call_worker(model, system, sc_prompt, provider=provider)
-            total_cost += model_cost
-            if sc_result["success"]:
-                sc_confidence = evaluate_confidence(prompt, sc_result["output"], task_type)
-                if sc_confidence >= confidence:
-                    result = sc_result
-                    confidence = sc_confidence
+            continue
 
-        success = confidence >= ACCEPT_THRESHOLD
+        # Below threshold
         update_bandit(model, task_type, confidence >= CONFIDENCE_THRESHOLD)
+        break
 
-        tier_history.append({
-            "tier": tier, "model": model, "confidence": confidence,
-            "output": result["output"], "success": success,
-        })
-
-        if confidence >= GOOD_THRESHOLD:
-            break  # Excellent — accept immediately
-        if success and tier == max_tier:
-            break  # Last tier, accept whatever we have
-
-    # Return best result
-    successful = [t for t in tier_history if t["success"]]
-    best = successful[-1] if successful else (
-        max(tier_history, key=lambda t: t["confidence"]) if tier_history else None
-    )
-
-    if not best:
-        return {"success": False, "output": "", "cost": total_cost,
-                "confidence": 0.0, "tier_used": 0, "model_used": "none"}
+    if not best_result:
+        return {"success": False, "output": "", "cost_usd": total_cost,
+                "confidence": 0.0, "model_used": model}
 
     return {
-        "success": best["success"],
-        "output":  best["output"],
-        "cost":    total_cost,
-        "confidence": best["confidence"],
-        "tier_used":  best["tier"],
-        "model_used": best["model"],
+        "success": best_confidence >= ACCEPT_THRESHOLD,
+        "output":  best_result.get("output", ""),
+        "cost_usd": total_cost,
+        "confidence": best_confidence,
+        "model_used": best_result.get("model", model),
     }
 
 
@@ -503,10 +382,11 @@ def decompose_task(task: dict) -> list:
         f"each completable in under 30 minutes. Max {MAX_SUBTASKS} subtasks. "
         "Respond with ONLY a JSON array: [{\"title\":\"...\",\"prompt\":\"...\",\"task_type\":\"...\"}]"
     )
-    result = _call_worker(
-        "kimi-k2.5", system,
+    result = call_llm(
         f"Split this task:\n\nTitle: {task['title']}\nPrompt: {task.get('prompt','')}",
-        max_tokens=1000
+        system=system,
+        task_type="default",
+        max_tokens=1000,
     )
     if not result["success"]:
         return []
@@ -551,31 +431,25 @@ def process_stage(
 
     p = stage_prompt(stage, title, prompt, prev_output)
 
-    # Execute stage: full Quality Gate tier cascade + bandit routing
+    # Execute stage: full Quality Gate cascade + bandit routing
     if stage == "execute":
         gate_result = execute_with_quality_gate(p, task_type, dept, budget_remaining)
-        output    = gate_result["output"]
-        cost      = gate_result["cost"]
+        output     = gate_result["output"]
+        cost       = gate_result["cost_usd"]
         confidence = gate_result["confidence"]
         model_used = gate_result["model_used"]
         success    = gate_result["success"]
-        tier_used  = gate_result["tier_used"]
     else:
-        # Non-execute stages: pick model via bandit, single call
-        model = get_best_model(task_type, [dept["default_model"], "kimi-k2.5"])
-        tier_entry = next((TIERS[t] for t in TIERS if TIERS[t]["model"] == model), None)
-        cost_per_call = tier_entry["cost"] if tier_entry else 0.0005
-        provider = tier_entry["provider"] if tier_entry else dept.get("provider", "alibaba")
-        result = _call_worker(model, dept["system"], p, provider=provider)
-        cost = cost_per_call
+        # Non-execute stages: single call via call_llm
+        result = call_llm(p, system=dept["system"], task_type=task_type)
+        cost = result.get("cost_usd", 0)
 
         valid, reason = schema_validate(result.get("output", ""), stage)
         output = result.get("output", "") if valid else ""
         success = valid and result["success"]
         confidence = evaluate_confidence(prompt, output, task_type) if success else 0.0
-        model_used = model
-        tier_used = 0
-        update_bandit(model, task_type, success)
+        model_used = result.get("model", get_model_for_task(task_type))
+        update_bandit(model_used, task_type, success)
 
     if sub_id:
         try:
@@ -593,10 +467,9 @@ def process_stage(
     return {
         "success":    success,
         "output":     output,
-        "cost":       cost,
+        "cost_usd":   cost,
         "confidence": confidence,
         "model_used": model_used,
-        "tier_used":  tier_used,
     }
 
 
@@ -606,20 +479,23 @@ def process_task(task: dict) -> str:
     title     = task.get("title", "Untitled")
     prompt    = task.get("prompt", task.get("description", title))
     task_type = task.get("task_type", "coding")
-    budget    = float(task.get("budget_cap_usd") or MAX_TASK_BUDGET)
 
     dept = DEPARTMENTS.get(task_type, DEFAULT_DEPT)
     dept_name = dept["name"]
-    print(f"\n→ [{task_id[:8]}] {title} [{dept_name}] budget=${budget:.2f}")
 
-    if budget <= 0:
+    budget_enforcer = BudgetEnforcer(float(task.get("budget_cap_usd") or MAX_TASK_BUDGET_USD))
+    detector = StuckDetector()
+
+    print(f"\n-> [{task_id[:8]}] {title} [{dept_name}] budget=${budget_enforcer.remaining:.2f}")
+
+    if budget_enforcer.remaining <= 0:
         sb_patch("tasks", task_id, {"status": "failed", "result": {"error": "zero budget"}})
         return "failed"
 
     sb_patch("tasks", task_id, {
         "status": "in_progress",
         "department": dept_name,
-        "model_used": dept["default_model"],
+        "model_used": get_model_for_task(task_type),
     })
 
     # Decompose complex tasks (Devin <30min rule)
@@ -627,8 +503,8 @@ def process_task(task: dict) -> str:
         print(f"  [decompose] splitting complex task...")
         subtasks = decompose_task(task)
         if subtasks:
-            print(f"  [decompose] → {len(subtasks)} subtasks queued")
-            sub_budget = round(budget / len(subtasks), 4)
+            print(f"  [decompose] -> {len(subtasks)} subtasks queued")
+            sub_budget = round(budget_enforcer.remaining / len(subtasks), 4)
             for st in subtasks:
                 sb_post("tasks", {
                     "title": st["title"],
@@ -646,80 +522,131 @@ def process_task(task: dict) -> str:
             return "decomposed"
 
     # SOP pipeline
-    total_cost = 0.0
     all_passed = True
     prev_output = ""
     final_confidence = 0.0
-    final_model = dept["default_model"]
-    final_tier = 0
+    final_model = get_model_for_task(task_type)
 
     for stage in SOP_STAGES:
-        budget_remaining = budget - total_cost
-        if budget_remaining <= 0:
-            print(f"  budget exhausted — skipping {stage}")
+        # Budget check via enforcer
+        try:
+            budget_enforcer.check_budget()
+        except BudgetExhaustedError as e:
+            print(f"  [budget] {e}")
             all_passed = False
             break
 
+        # Kill switch check
+        if should_exit():
+            print("  [kill] Shutdown requested")
+            all_passed = False
+            break
+
+        # Enhance execute stage with learning from past successes
+        if stage == "execute":
+            history_ctx = build_context_from_history(SUPABASE_URL, SUPABASE_KEY, task_type)
+            if history_ctx:
+                prompt = f"{history_ctx}\n\n---\n\n{prompt}"
+
         print(f"  [{stage}]", end=" ", flush=True)
         stage_result = process_stage(
-            task_id, title, prompt, stage, dept, task_type, prev_output, budget_remaining
+            task_id, title, prompt, stage, dept, task_type, prev_output, budget_enforcer.remaining
         )
 
-        total_cost += stage_result["cost"]
+        # Commit actual cost to budget enforcer
+        budget_enforcer.commit(actual=stage_result.get("cost_usd", 0))
+
+        # Feed stuck detector
+        detector.record_action(stage)
+        if stage_result["success"]:
+            detector.record_observation(stage_result["output"][:200])
+        else:
+            detector.record_error(stage_result.get("error", stage_result.get("output", "failed")))
+
+        # Check if stuck
+        if detector.is_stuck():
+            print(f"  [stuck] {detector.stuck_reason}")
+            all_passed = False
+            break
 
         if stage == "execute":
             # Always capture execute metrics regardless of success
             final_confidence = stage_result["confidence"]
             final_model = stage_result["model_used"]
-            final_tier  = stage_result["tier_used"]
 
         if stage_result["success"]:
             prev_output = stage_result["output"]
             conf_str = f"conf={stage_result['confidence']:.0%}" if stage_result["confidence"] else ""
-            print(f"✓ {conf_str}")
+            print(f"ok {conf_str}")
         else:
             all_passed = False
-            print(f"✗")
+            print(f"FAIL")
             if stage == "execute":
-                print(f"  execute failed — marking for review")
+                print(f"  execute failed -- marking for review")
                 break
+
+    # Record outcome for self-improving learning
+    total_cost = budget_enforcer.spent
+    record_outcome(
+        SUPABASE_URL, SUPABASE_KEY,
+        task_type, prompt[:500], final_model,
+        final_confidence, total_cost, all_passed,
+        prev_output[:500] if prev_output else "",
+    )
 
     final_status = "completed" if all_passed else "review"
     sb_patch("tasks", task_id, {
         "status": final_status,
-        "cost_usd": round(total_cost, 5),
+        "cost_usd": round(budget_enforcer.spent, 5),
         "result": {
-            "department":     dept_name,
-            "model":          final_model,
-            "tier_used":      final_tier,
+            "department":       dept_name,
+            "model":            final_model,
             "confidence_score": round(final_confidence, 3),
-            "all_passed":     all_passed,
-            "total_cost_usd": round(total_cost, 5),
-            "output_preview": prev_output[:800] if prev_output else "",
+            "all_passed":       all_passed,
+            "total_cost_usd":   round(budget_enforcer.spent, 5),
+            "output_preview":   prev_output[:800] if prev_output else "",
         },
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
-    print(f"  → {final_status.upper()} conf={final_confidence:.0%} ${total_cost:.4f}")
+    from discord_notify import notify_task_complete
+    notify_task_complete(
+        task_id=task_id, title=title, status=final_status,
+        confidence=final_confidence, cost_usd=total_cost, department=dept_name,
+    )
+
+    print(f"  -> {final_status.upper()} conf={final_confidence:.0%} ${budget_enforcer.spent:.4f}")
     return final_status
 
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 def run_loop():
-    dept_summary = ", ".join(f"{k}={v['default_model']}" for k, v in DEPARTMENTS.items())
-    print(f"[agency] Worker started — poll={POLL_INTERVAL}s retries={MAX_RETRIES} budget=${MAX_TASK_BUDGET}")
+    install_signal_handlers()
+
+    dept_summary = ", ".join(f"{k}={v.get('route', 'default')}" for k, v in DEPARTMENTS.items())
+    print(f"[agency] Worker started -- poll={POLL_INTERVAL}s retries={MAX_RETRIES} budget=${MAX_TASK_BUDGET_USD}")
     print(f"[agency] Supabase: {SUPABASE_URL}")
     print(f"[agency] Departments: {dept_summary}")
-    print(f"[agency] Features: Thompson sampling + Ralph Gate + Quality Gate tiers")
+    print(f"[agency] Features: Thompson sampling + Ralph Gate + LiteLLM gateway + BudgetEnforcer + StuckDetector")
 
     consecutive_errors = 0
     while True:
+        if should_exit():
+            print("[agency] Shutdown requested, exiting")
+            break
+
         try:
             tasks = sb_get("tasks?status=eq.pending&order=priority.desc,created_at.asc&limit=3")
             if isinstance(tasks, list) and tasks:
                 print(f"\n[agency] {len(tasks)} pending task(s)")
                 for task in tasks:
+                    if should_exit():
+                        print("[agency] Shutdown requested, exiting")
+                        break
                     process_task(task)
                 consecutive_errors = 0
+
+                # Watchdog sweep after processing batch
+                run_watchdog_sweep(SUPABASE_URL, SUPABASE_KEY, STUCK_TIMEOUT_SECONDS)
             else:
                 print(".", end="", flush=True)
                 consecutive_errors = 0
@@ -727,7 +654,7 @@ def run_loop():
             consecutive_errors += 1
             print(f"\n[agency] error #{consecutive_errors}: {e}")
             if consecutive_errors >= 5:
-                print("[agency] too many errors — backing off 5 min")
+                print("[agency] too many errors -- backing off 5 min")
                 time.sleep(300)
                 consecutive_errors = 0
                 continue

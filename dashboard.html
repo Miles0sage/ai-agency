@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI FACTORY v2 — Live Dashboard</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0f;--bg2:#0d0d14;--bg3:#12121c;
+  --green:#00ff41;--cyan:#00d4ff;--red:#ff003c;--yellow:#ffd700;--gray:#555;
+  --text:#c0c0c0;--text-dim:#666;
+  --font:'Courier New',Consolas,'Liberation Mono',monospace;
+  --glow-green:0 0 10px #00ff4180,0 0 20px #00ff4140;
+  --glow-cyan:0 0 10px #00d4ff80,0 0 20px #00d4ff40;
+  --glow-red:0 0 10px #ff003c80;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;overflow-x:hidden}
+
+/* scanline overlay */
+body::after{
+  content:'';position:fixed;inset:0;pointer-events:none;z-index:9999;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.06) 2px,rgba(0,0,0,.06) 4px);
+}
+
+a{color:var(--cyan);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── HEADER ── */
+.header{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
+  padding:16px 24px;border-bottom:1px solid #1a1a2e;background:var(--bg2);
+}
+.header-title{
+  font-size:24px;font-weight:700;letter-spacing:4px;text-transform:uppercase;
+  color:var(--green);text-shadow:var(--glow-green);
+  animation:pulse-glow 2s ease-in-out infinite;
+}
+@keyframes pulse-glow{
+  0%,100%{text-shadow:0 0 10px #00ff4180,0 0 20px #00ff4140}
+  50%{text-shadow:0 0 20px #00ff41c0,0 0 40px #00ff4180,0 0 60px #00ff4140}
+}
+.header-right{display:flex;align-items:center;gap:20px}
+.clock{font-size:16px;color:var(--cyan);letter-spacing:2px}
+.status-indicator{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim)}
+.status-dot{
+  width:10px;height:10px;border-radius:50%;background:var(--green);
+  box-shadow:var(--glow-green);animation:blink 2s ease-in-out infinite;
+}
+.status-dot.error{background:var(--red);box-shadow:var(--glow-red);animation:none}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── STATS BAR ── */
+.stats-bar{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;
+  padding:16px 24px;border-bottom:1px solid #1a1a2e;background:var(--bg2);
+}
+.stat-card{
+  background:var(--bg3);border:1px solid #1a1a2e;border-radius:6px;padding:12px 16px;
+  transition:border-color .3s;
+}
+.stat-card:hover{border-color:var(--cyan)}
+.stat-label{font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--text-dim);margin-bottom:4px}
+.stat-value{font-size:22px;font-weight:700;color:var(--green)}
+.stat-value.cyan{color:var(--cyan)}
+.stat-value.yellow{color:var(--yellow)}
+.stat-value.red{color:var(--red)}
+
+/* ── MAIN CONTENT ── */
+.main{padding:16px 24px;display:flex;flex-direction:column;gap:20px}
+.section-title{
+  font-size:12px;text-transform:uppercase;letter-spacing:3px;color:var(--cyan);
+  border-bottom:1px solid #1a1a2e;padding-bottom:6px;margin-bottom:8px;
+}
+
+/* ── PIPELINE VIZ ── */
+.pipeline-container{display:flex;flex-direction:column;gap:10px}
+.pipeline-row{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  background:var(--bg3);border:1px solid #1a1a2e;border-radius:6px;padding:10px 14px;
+}
+.pipeline-task-id{font-size:11px;color:var(--cyan);min-width:80px}
+.pipeline-task-title{font-size:12px;color:var(--text);min-width:120px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pipeline-stages{display:flex;align-items:center;gap:0;flex:1;min-width:300px}
+.pipeline-stage{
+  padding:6px 14px;font-size:10px;text-transform:uppercase;letter-spacing:1px;
+  background:var(--bg);border:1px solid #1a1a2e;color:var(--text-dim);
+  position:relative;transition:all .3s;
+}
+.pipeline-stage:first-child{border-radius:4px 0 0 4px}
+.pipeline-stage:last-child{border-radius:0 4px 4px 0}
+.pipeline-stage.completed{background:#00ff4115;border-color:#00ff4140;color:var(--green)}
+.pipeline-stage.active{
+  background:#00d4ff20;border-color:var(--cyan);color:var(--cyan);
+  box-shadow:0 0 8px #00d4ff40;animation:stage-pulse 1.5s ease-in-out infinite;
+}
+@keyframes stage-pulse{0%,100%{box-shadow:0 0 8px #00d4ff40}50%{box-shadow:0 0 16px #00d4ff80}}
+
+/* ── TABLE ── */
+.task-table{width:100%;border-collapse:collapse}
+.task-table th{
+  font-size:10px;text-transform:uppercase;letter-spacing:2px;color:var(--text-dim);
+  padding:8px 10px;text-align:left;border-bottom:1px solid #1a1a2e;
+}
+.task-table td{
+  padding:8px 10px;border-bottom:1px solid #0f0f1a;font-size:13px;
+  transition:background .3s;
+}
+.task-table tr:hover td{background:#ffffff06}
+.task-table .mono{font-family:var(--font);letter-spacing:1px}
+
+/* status badges */
+.badge{
+  display:inline-block;padding:2px 10px;border-radius:3px;font-size:11px;
+  font-weight:600;letter-spacing:1px;text-transform:uppercase;
+}
+.badge.completed{background:#00ff4118;color:var(--green);box-shadow:inset 0 0 6px #00ff4120}
+.badge.in_progress{background:#ffd70018;color:var(--yellow);box-shadow:inset 0 0 6px #ffd70020}
+.badge.failed{background:#ff003c18;color:var(--red);box-shadow:inset 0 0 6px #ff003c20}
+.badge.pending{background:#55555518;color:var(--gray)}
+.badge.killed{background:#ff003c18;color:var(--red)}
+
+/* kill button */
+.kill-btn{
+  background:transparent;border:1px solid var(--red);color:var(--red);
+  padding:3px 10px;border-radius:3px;cursor:pointer;font-family:var(--font);
+  font-size:11px;transition:all .2s;
+}
+.kill-btn:hover{background:var(--red);color:#fff;box-shadow:var(--glow-red)}
+.kill-btn:disabled{opacity:.3;cursor:not-allowed}
+
+/* model tag */
+.model-tag{
+  font-size:11px;padding:2px 8px;border-radius:3px;
+  background:#00d4ff12;color:var(--cyan);border:1px solid #00d4ff30;
+}
+
+/* confidence bar */
+.conf-bar{display:flex;align-items:center;gap:6px}
+.conf-bar-track{width:50px;height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+.conf-bar-fill{height:100%;border-radius:3px;transition:width .5s}
+
+/* ── EMPTY STATE ── */
+.empty{text-align:center;padding:40px;color:var(--text-dim);font-size:13px}
+
+/* ── TOAST ── */
+.toast{
+  position:fixed;bottom:24px;right:24px;padding:10px 20px;border-radius:6px;
+  font-family:var(--font);font-size:13px;z-index:10000;
+  opacity:0;transform:translateY(20px);transition:all .3s;pointer-events:none;
+}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{background:#00ff4130;color:var(--green);border:1px solid #00ff4160}
+.toast.error{background:#ff003c30;color:var(--red);border:1px solid #ff003c60}
+
+/* ── RESPONSIVE ── */
+@media(max-width:768px){
+  .header{padding:12px 16px}
+  .header-title{font-size:18px;letter-spacing:2px}
+  .stats-bar{padding:12px 16px;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px}
+  .stat-value{font-size:18px}
+  .main{padding:12px 16px}
+  .task-table{font-size:12px}
+  .task-table th,.task-table td{padding:6px 6px}
+  .pipeline-row{flex-direction:column;align-items:flex-start}
+  .pipeline-stages{min-width:0;flex-wrap:wrap}
+  .pipeline-stage{padding:4px 10px;font-size:9px}
+  .hide-mobile{display:none}
+}
+@media(max-width:480px){
+  .stats-bar{grid-template-columns:repeat(2,1fr)}
+}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:#1a1a2e;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#2a2a3e}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-title">AI FACTORY v2</div>
+  <div class="header-right">
+    <div class="status-indicator">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">CONNECTING</span>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+</div>
+
+<!-- STATS BAR -->
+<div class="stats-bar" id="statsBar">
+  <div class="stat-card"><div class="stat-label">Total Tasks</div><div class="stat-value cyan" id="statTotal">--</div></div>
+  <div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value" id="statCompleted">--</div></div>
+  <div class="stat-card"><div class="stat-label">In Progress</div><div class="stat-value yellow" id="statProgress">--</div></div>
+  <div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value red" id="statFailed">--</div></div>
+  <div class="stat-card"><div class="stat-label">Total Cost</div><div class="stat-value cyan" id="statCost">--</div></div>
+</div>
+
+<!-- MAIN CONTENT -->
+<div class="main">
+
+  <!-- SOP PIPELINE VIZ -->
+  <div id="pipelineSection" style="display:none">
+    <div class="section-title">SOP Pipeline — Active Tasks</div>
+    <div class="pipeline-container" id="pipelineContainer"></div>
+  </div>
+
+  <!-- LIVE TASK FEED -->
+  <div>
+    <div class="section-title">Live Task Feed</div>
+    <div style="overflow-x:auto">
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Title</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th class="hide-mobile">Model</th>
+            <th class="hide-mobile">Confidence</th>
+            <th>Cost</th>
+            <th class="hide-mobile">Time</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="taskBody"></tbody>
+      </table>
+      <div class="empty" id="emptyState">NO TASKS DETECTED — FACTORY IDLE</div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API_BASE = window.location.origin;
+let lastTaskJSON = '';
+let lastStatsJSON = '';
+
+// ── CLOCK ──
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    now.toLocaleTimeString('en-GB', { hour12: false });
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── TOAST ──
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  setTimeout(() => { t.className = 'toast'; }, 3000);
+}
+
+// ── FETCH HELPERS ──
+async function fetchJSON(path) {
+  const r = await fetch(API_BASE + path);
+  if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
+  return r.json();
+}
+
+// ── STATS ──
+async function refreshStats() {
+  try {
+    const d = await fetchJSON('/dashboard');
+    const json = JSON.stringify(d);
+    if (json === lastStatsJSON) return;
+    lastStatsJSON = json;
+
+    document.getElementById('statTotal').textContent = d.total_tasks || 0;
+    document.getElementById('statCompleted').textContent = (d.by_status && d.by_status.completed) || 0;
+    document.getElementById('statProgress').textContent = (d.by_status && d.by_status.in_progress) || 0;
+    document.getElementById('statFailed').textContent = (d.by_status && d.by_status.failed) || 0;
+    document.getElementById('statCost').textContent = '$' + (d.total_cost_usd || 0).toFixed(4);
+
+    document.getElementById('statusDot').className = 'status-dot';
+    document.getElementById('statusText').textContent = 'ONLINE';
+  } catch (e) {
+    document.getElementById('statusDot').className = 'status-dot error';
+    document.getElementById('statusText').textContent = 'OFFLINE';
+  }
+}
+
+// ── PIPELINE STAGES ──
+const SOP_STAGES = ['requirements', 'plan', 'execute', 'verify', 'deliver'];
+
+function inferStage(task) {
+  const r = task.result;
+  if (!r || typeof r !== 'object') return 0;
+  if (r.sop_stage) {
+    const idx = SOP_STAGES.indexOf(r.sop_stage);
+    return idx >= 0 ? idx : 0;
+  }
+  if (r.deliverable || r.output) return 4;
+  if (r.verification || r.tests_passed) return 3;
+  if (r.implementation || r.code) return 2;
+  if (r.plan || r.design) return 1;
+  if (r.requirements || r.prd) return 0;
+  return 0;
+}
+
+function buildPipeline(task) {
+  const active = inferStage(task);
+  const row = document.createElement('div');
+  row.className = 'pipeline-row';
+
+  const idEl = document.createElement('div');
+  idEl.className = 'pipeline-task-id mono';
+  idEl.textContent = task.id ? task.id.substring(0, 8) : '--------';
+  row.appendChild(idEl);
+
+  const titleEl = document.createElement('div');
+  titleEl.className = 'pipeline-task-title';
+  titleEl.textContent = task.title || 'Untitled';
+  titleEl.title = task.title || '';
+  row.appendChild(titleEl);
+
+  const stagesEl = document.createElement('div');
+  stagesEl.className = 'pipeline-stages';
+  SOP_STAGES.forEach((s, i) => {
+    const el = document.createElement('div');
+    el.className = 'pipeline-stage';
+    if (i < active) el.classList.add('completed');
+    else if (i === active) el.classList.add('active');
+    el.textContent = s;
+    stagesEl.appendChild(el);
+  });
+  row.appendChild(stagesEl);
+  return row;
+}
+
+// ── TASK TABLE ──
+function statusClass(s) {
+  if (s === 'completed') return 'completed';
+  if (s === 'in_progress') return 'in_progress';
+  if (s === 'failed') return 'failed';
+  if (s === 'killed') return 'killed';
+  return 'pending';
+}
+
+function formatTime(ts) {
+  if (!ts) return '--';
+  try {
+    const d = new Date(ts);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  } catch { return '--'; }
+}
+
+function getModel(task) {
+  if (task.result && typeof task.result === 'object') {
+    return task.result.model || task.result.worker || '';
+  }
+  return '';
+}
+
+function getConfidence(task) {
+  if (task.result && typeof task.result === 'object') {
+    const c = task.result.confidence;
+    if (c !== undefined && c !== null) return parseFloat(c);
+  }
+  if (task.confidence !== undefined && task.confidence !== null) return parseFloat(task.confidence);
+  return null;
+}
+
+function confColor(v) {
+  if (v >= 0.8) return 'var(--green)';
+  if (v >= 0.5) return 'var(--yellow)';
+  return 'var(--red)';
+}
+
+async function killTask(id) {
+  try {
+    await fetch(API_BASE + '/tasks/' + id, { method: 'DELETE' });
+    showToast('Task ' + id.substring(0, 8) + ' killed', 'success');
+    refreshAll();
+  } catch (e) {
+    showToast('Kill failed: ' + e.message, 'error');
+  }
+}
+
+function renderTasks(tasks) {
+  const body = document.getElementById('taskBody');
+  const empty = document.getElementById('emptyState');
+  const pipelineSection = document.getElementById('pipelineSection');
+  const pipelineContainer = document.getElementById('pipelineContainer');
+
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    body.innerHTML = '';
+    empty.style.display = 'block';
+    pipelineSection.style.display = 'none';
+    return;
+  }
+  empty.style.display = 'none';
+
+  // Pipeline for in_progress tasks
+  const activeTasks = tasks.filter(t => t.status === 'in_progress');
+  if (activeTasks.length > 0) {
+    pipelineSection.style.display = 'block';
+    pipelineContainer.innerHTML = '';
+    activeTasks.forEach(t => pipelineContainer.appendChild(buildPipeline(t)));
+  } else {
+    pipelineSection.style.display = 'none';
+  }
+
+  // Task table rows
+  const fragment = document.createDocumentFragment();
+  tasks.forEach(t => {
+    const tr = document.createElement('tr');
+
+    // ID
+    const tdId = document.createElement('td');
+    tdId.className = 'mono';
+    tdId.style.color = 'var(--cyan)';
+    tdId.textContent = t.id ? t.id.substring(0, 8) : '--------';
+    tr.appendChild(tdId);
+
+    // Title
+    const tdTitle = document.createElement('td');
+    tdTitle.textContent = t.title || 'Untitled';
+    tdTitle.style.maxWidth = '240px';
+    tdTitle.style.overflow = 'hidden';
+    tdTitle.style.textOverflow = 'ellipsis';
+    tdTitle.style.whiteSpace = 'nowrap';
+    tdTitle.title = t.title || '';
+    tr.appendChild(tdTitle);
+
+    // Type
+    const tdType = document.createElement('td');
+    tdType.textContent = t.task_type || '--';
+    tdType.style.color = 'var(--text-dim)';
+    tr.appendChild(tdType);
+
+    // Status
+    const tdStatus = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'badge ' + statusClass(t.status);
+    badge.textContent = (t.status || 'unknown').replace('_', ' ');
+    tdStatus.appendChild(badge);
+    tr.appendChild(tdStatus);
+
+    // Model
+    const tdModel = document.createElement('td');
+    tdModel.className = 'hide-mobile';
+    const model = getModel(t);
+    if (model) {
+      const tag = document.createElement('span');
+      tag.className = 'model-tag';
+      tag.textContent = model;
+      tdModel.appendChild(tag);
+    } else {
+      tdModel.textContent = '--';
+      tdModel.style.color = 'var(--text-dim)';
+    }
+    tr.appendChild(tdModel);
+
+    // Confidence
+    const tdConf = document.createElement('td');
+    tdConf.className = 'hide-mobile';
+    const conf = getConfidence(t);
+    if (conf !== null) {
+      const bar = document.createElement('div');
+      bar.className = 'conf-bar';
+      const track = document.createElement('div');
+      track.className = 'conf-bar-track';
+      const fill = document.createElement('div');
+      fill.className = 'conf-bar-fill';
+      fill.style.width = Math.round(conf * 100) + '%';
+      fill.style.background = confColor(conf);
+      track.appendChild(fill);
+      bar.appendChild(track);
+      const label = document.createElement('span');
+      label.textContent = Math.round(conf * 100) + '%';
+      label.style.fontSize = '11px';
+      label.style.color = confColor(conf);
+      bar.appendChild(label);
+      tdConf.appendChild(bar);
+    } else {
+      tdConf.textContent = '--';
+      tdConf.style.color = 'var(--text-dim)';
+    }
+    tr.appendChild(tdConf);
+
+    // Cost
+    const tdCost = document.createElement('td');
+    const cost = t.cost_usd || (t.result && t.result.cost_usd);
+    tdCost.textContent = cost ? '$' + parseFloat(cost).toFixed(4) : '--';
+    tdCost.style.color = cost ? 'var(--green)' : 'var(--text-dim)';
+    tr.appendChild(tdCost);
+
+    // Time
+    const tdTime = document.createElement('td');
+    tdTime.className = 'hide-mobile';
+    tdTime.textContent = formatTime(t.created_at || t.updated_at);
+    tdTime.style.color = 'var(--text-dim)';
+    tr.appendChild(tdTime);
+
+    // Kill button
+    const tdKill = document.createElement('td');
+    if (t.status === 'in_progress') {
+      const btn = document.createElement('button');
+      btn.className = 'kill-btn';
+      btn.textContent = 'KILL';
+      btn.onclick = () => killTask(t.id);
+      tdKill.appendChild(btn);
+    }
+    tr.appendChild(tdKill);
+
+    fragment.appendChild(tr);
+  });
+
+  body.innerHTML = '';
+  body.appendChild(fragment);
+}
+
+async function refreshTasks() {
+  try {
+    const tasks = await fetchJSON('/tasks?limit=20');
+    const json = JSON.stringify(tasks);
+    if (json === lastTaskJSON) return;
+    lastTaskJSON = json;
+    renderTasks(tasks);
+  } catch (e) {
+    // stats handler already sets offline status
+  }
+}
+
+// ── REFRESH LOOP ──
+async function refreshAll() {
+  await Promise.all([refreshStats(), refreshTasks()]);
+}
+
+refreshAll();
+setInterval(refreshAll, 5000);
+</script>
+</body>
+</html>
