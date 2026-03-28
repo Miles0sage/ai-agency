@@ -26,6 +26,9 @@ SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", os.environ.get("SUPABASE_K
 DASHSCOPE_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-sp-7424af93156c47fb94a524398af5f43e")
 DASHSCOPE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions"
 
+MINIMAX_KEY = os.environ.get("MINIMAX_API_KEY", "sk-cp-5cmx4OmXEq3yfUV6TjDUcIac--MLy-zKxuCTgwscz0FCqzOwGLnlGrQ4cIevAF1DRqRupwokrirf3_jEdZqqS9EMKMuivy3JfmVjqZUFg3BDGa4_KsEqii0")
+MINIMAX_URL  = "https://api.minimax.io/v1/chat/completions"
+
 POLL_INTERVAL   = int(os.environ.get("POLL_INTERVAL", "20"))
 MAX_RETRIES     = int(os.environ.get("MAX_STAGE_RETRIES", "3"))
 MAX_TASK_BUDGET = float(os.environ.get("MAX_TASK_BUDGET_USD", "0.10"))
@@ -38,20 +41,20 @@ GOOD_THRESHOLD       = 0.8   # >= accept immediately, skip self-correct
 
 SOP_STAGES = ["requirements", "plan", "execute", "verify", "deliver"]
 
-# ── Quality Gate Tiers (ported from ai-factory/quality_gate.py) ───────────────
-# Tier 1: cheap fast, Tier 2: balanced, Tier 3: best quality
+# ── Quality Gate Tiers — openclaw worker fleet ────────────────────────────────
+# Mirrors openclaw agent roster: kimi (cheap), qwen-coder (specialist), minimax (elite)
 TIERS = {
-    1: {"model": "qwen3.5-plus",    "cost": 0.0002},
-    2: {"model": "qwen3.5-plus",    "cost": 0.0005},
-    3: {"model": "qwen3-coder-plus","cost": 0.0008},
+    1: {"model": "kimi-k2.5",       "provider": "alibaba", "cost": 0.0003},
+    2: {"model": "qwen3-coder-plus", "provider": "alibaba", "cost": 0.0008},
+    3: {"model": "MiniMax-M2.7",    "provider": "minimax", "cost": 0.0015},
 }
 
 # Which tiers to use per task_type (start_tier, max_tier)
 TIER_RANGES = {
     "coding":    (1, 3),
     "research":  (1, 2),
-    "writing":   (1, 2),
-    "qa":        (1, 3),
+    "writing":   (1, 1),
+    "qa":        (1, 2),
     "marketing": (1, 1),
 }
 
@@ -59,31 +62,36 @@ TIER_RANGES = {
 DEPARTMENTS = {
     "coding": {
         "name": "Engineering",
-        "default_model": "qwen3-coder-plus",
+        "default_model": "kimi-k2.5",
+        "provider": "alibaba",
         "system": "You are a senior software engineer. Write clean, tested, production-ready code with error handling and type hints.",
         "confidence_type": "coding",
     },
     "research": {
         "name": "Research",
-        "default_model": "qwen3.5-plus",
+        "default_model": "MiniMax-M2.7",
+        "provider": "minimax",
         "system": "You are a research analyst. Provide thorough, well-structured analysis with clear conclusions and actionable insights.",
         "confidence_type": "research",
     },
     "writing": {
         "name": "Writing",
-        "default_model": "qwen3.5-plus",
+        "default_model": "kimi-k2.5",
+        "provider": "alibaba",
         "system": "You are a professional content writer. Produce clear, engaging, well-structured content tailored to the audience.",
         "confidence_type": "writing",
     },
     "qa": {
         "name": "QA",
-        "default_model": "qwen3.5-plus",
+        "default_model": "kimi-k2.5",
+        "provider": "alibaba",
         "system": "You are a QA engineer. Find bugs, edge cases, quality issues. Provide specific, actionable test cases and verification steps.",
         "confidence_type": "review",
     },
     "marketing": {
         "name": "Marketing",
-        "default_model": "qwen3.5-plus",
+        "default_model": "kimi-k2.5",
+        "provider": "alibaba",
         "system": "You are a growth marketer. Write compelling copy and strategies that drive conversions and engagement.",
         "confidence_type": "writing",
     },
@@ -310,12 +318,18 @@ def evaluate_confidence(task_intent: str, output: str, task_type: str = "coding"
 
 
 # ── AI call ────────────────────────────────────────────────────────────────────
-def _call_dashscope(model: str, system: str, user: str, max_tokens: int = 2000) -> dict:
-    """Raw HTTP call to Alibaba DashScope (OpenAI-compatible endpoint)."""
+def _call_worker(model: str, system: str, user: str, max_tokens: int = 2000, provider: str = "alibaba") -> dict:
+    """Unified LLM call — routes to Alibaba DashScope or MiniMax based on provider."""
+    if provider == "minimax":
+        url = MINIMAX_URL
+        key = MINIMAX_KEY
+    else:
+        url = DASHSCOPE_URL
+        key = DASHSCOPE_KEY
     try:
         r = requests.post(
-            DASHSCOPE_URL,
-            headers={"Authorization": f"Bearer {DASHSCOPE_KEY}", "Content-Type": "application/json"},
+            url,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
                 "model": model,
                 "messages": [
@@ -330,12 +344,16 @@ def _call_dashscope(model: str, system: str, user: str, max_tokens: int = 2000) 
         if r.status_code == 200:
             data = r.json()
             content = data["choices"][0]["message"]["content"]
-            # Strip <think>...</think> reasoning blocks — qwen3 models emit these
+            # Strip <think>...</think> reasoning blocks emitted by kimi/qwen3/minimax
             content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
             return {"success": True, "output": content, "error": ""}
         return {"success": False, "output": "", "error": f"HTTP {r.status_code}: {r.text[:300]}"}
     except Exception as e:
         return {"success": False, "output": "", "error": str(e)}
+
+# Keep old name as alias for any callers
+def _call_dashscope(model: str, system: str, user: str, max_tokens: int = 2000) -> dict:
+    return _call_worker(model, system, user, max_tokens, provider="alibaba")
 
 
 # ── Quality Gate: tiered execute with escalation ───────────────────────────────
@@ -372,14 +390,13 @@ def execute_with_quality_gate(
         # Use bandit-selected model for first tier, escalate linearly after
         if tier == start_tier:
             model = bandit_model
-            # Match cost to whichever tier that model belongs to
-            model_cost = next(
-                (TIERS[t]["cost"] for t in TIERS if TIERS[t]["model"] == model),
-                TIERS[tier]["cost"]
-            )
+            tier_entry = next((TIERS[t] for t in TIERS if TIERS[t]["model"] == model), TIERS[tier])
+            model_cost = tier_entry["cost"]
+            provider = tier_entry["provider"]
         else:
             model = TIERS[tier]["model"]
             model_cost = TIERS[tier]["cost"]
+            provider = TIERS[tier]["provider"]
 
         system = dept["system"]
 
@@ -395,7 +412,7 @@ def execute_with_quality_gate(
             )
 
         # Attempt 1
-        result = _call_dashscope(model, system, current_prompt)
+        result = _call_worker(model, system, current_prompt, provider=provider)
         total_cost += model_cost
 
         if not result["success"]:
@@ -414,7 +431,7 @@ def execute_with_quality_gate(
                 f"Your output was partially acceptable but needs improvement. "
                 f"Please fix and resubmit a complete, high-quality answer."
             )
-            sc_result = _call_dashscope(model, system, sc_prompt)
+            sc_result = _call_worker(model, system, sc_prompt, provider=provider)
             total_cost += model_cost
             if sc_result["success"]:
                 sc_confidence = evaluate_confidence(prompt, sc_result["output"], task_type)
@@ -484,8 +501,8 @@ def decompose_task(task: dict) -> list:
         f"each completable in under 30 minutes. Max {MAX_SUBTASKS} subtasks. "
         "Respond with ONLY a JSON array: [{\"title\":\"...\",\"prompt\":\"...\",\"task_type\":\"...\"}]"
     )
-    result = _call_dashscope(
-        "qwen3.5-plus", system,
+    result = _call_worker(
+        "kimi-k2.5", system,
         f"Split this task:\n\nTitle: {task['title']}\nPrompt: {task.get('prompt','')}",
         max_tokens=1000
     )
@@ -543,13 +560,11 @@ def process_stage(
         tier_used  = gate_result["tier_used"]
     else:
         # Non-execute stages: pick model via bandit, single call
-        model = get_best_model(task_type, [dept["default_model"], "qwen3.5-plus"])
-        cost_per_call = next(
-            (TIERS[t]["cost"] for t in TIERS if TIERS[t]["model"] == model),
-            0.0005
-        )
-        start = time.time()
-        result = _call_dashscope(model, dept["system"], p)
+        model = get_best_model(task_type, [dept["default_model"], "kimi-k2.5"])
+        tier_entry = next((TIERS[t] for t in TIERS if TIERS[t]["model"] == model), None)
+        cost_per_call = tier_entry["cost"] if tier_entry else 0.0005
+        provider = tier_entry["provider"] if tier_entry else dept.get("provider", "alibaba")
+        result = _call_worker(model, dept["system"], p, provider=provider)
         cost = cost_per_call
 
         valid, reason = schema_validate(result.get("output", ""), stage)
