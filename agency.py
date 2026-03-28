@@ -17,7 +17,6 @@ import requests
 from datetime import datetime, timezone
 from typing import Optional
 import random
-import math
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://upximucxncuajnakylyf.supabase.co")
@@ -131,44 +130,58 @@ def sb_patch(table: str, row_id: str, data: dict) -> Optional[dict]:
         return None
 
 # ── Thompson Sampling Bandit (ported from ai-factory/orchestrator.py) ─────────
+# Per-thread Random instance — avoids module-level state contention if concurrency added later
+_thread_local = threading.local()
+def _rng() -> random.Random:
+    if not hasattr(_thread_local, "rng"):
+        _thread_local.rng = random.Random()
+    return _thread_local.rng
+
+# Serialises read-modify-write bandit updates within this process.
+# The worker runs single-threaded, so this is belt-and-suspenders for future safety.
+_BANDIT_LOCK = threading.Lock()
+
 
 def thompson_sample(successes: int, failures: int) -> float:
     """
     Draw a sample from Beta(alpha, beta) distribution.
     Higher successes → higher expected value → model gets picked more.
-    Ported from ai-factory/orchestrator.py.
+    Uses per-thread Random instance for thread safety.
+    Ported from ai-factory/orchestrator.py (betavariate replaces manual Gamma approx).
     """
-    alpha = max(successes + 1, 1)
-    beta  = max(failures  + 1, 1)
-    # Use Python's random.betavariate for Beta distribution sampling
-    return random.betavariate(alpha, beta)
+    alpha = successes + 1  # always >= 1 since successes >= 0
+    beta  = failures  + 1
+    return _rng().betavariate(alpha, beta)
 
 
 def update_bandit(model: str, task_type: str, success: bool):
     """
-    Update Thompson bandit state in Supabase after a task outcome.
-    Upserts agency_bandit_state row for (model, task_type).
+    Atomic-safe update of Thompson bandit state in Supabase.
+    Uses a process-level lock to serialise the read-modify-write cycle,
+    preventing lost updates from concurrent calls within this process.
     """
-    try:
-        # Fetch current state
-        rows = sb_get(
-            f"agency_bandit_state?model=eq.{model}&task_type=eq.{task_type}&select=id,successes,failures"
-        )
-        if rows:
-            row = rows[0]
-            row_id = row["id"]
-            s = row.get("successes", 0) + (1 if success else 0)
-            f = row.get("failures", 0)  + (0 if success else 1)
-            sb_patch("agency_bandit_state", row_id, {"successes": s, "failures": f})
-        else:
-            sb_post("agency_bandit_state", {
-                "model": model,
-                "task_type": task_type,
-                "successes": 1 if success else 0,
-                "failures":  0 if success else 1,
-            })
-    except Exception:
-        pass  # bandit table may not exist yet — graceful degradation
+    with _BANDIT_LOCK:
+        try:
+            rows = sb_get(
+                f"agency_bandit_state?model=eq.{model}&task_type=eq.{task_type}&select=id,successes,failures"
+            )
+            if rows:
+                row = rows[0]
+                s = row.get("successes", 0) + (1 if success else 0)
+                f = row.get("failures",  0) + (0 if success else 1)
+                sb_patch("agency_bandit_state", row["id"], {
+                    "successes": s, "failures": f,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+            else:
+                sb_post("agency_bandit_state", {
+                    "model": model,
+                    "task_type": task_type,
+                    "successes": 1 if success else 0,
+                    "failures":  0 if success else 1,
+                })
+        except Exception:
+            pass  # bandit table may not exist yet — degrade gracefully
 
 
 def get_best_model(task_type: str, candidates: list[str]) -> str:

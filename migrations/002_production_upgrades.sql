@@ -49,3 +49,6 @@ create table if not exists agency_bandit_state (
 create index if not exists idx_bandit_model_type on agency_bandit_state(model, task_type);
 alter table agency_bandit_state enable row level security;
 create policy if not exists "service_all_bandit" on agency_bandit_state for all using (true);
+
+-- Add review_score column to agency_subtasks (written by quality gate)
+alter table agency_subtasks add column if not exists review_score text;
