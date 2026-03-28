@@ -9,19 +9,14 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     warnings.warn("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. API will start but tasks will fail.")
 
 # ── LiteLLM Model Routing Table ──
-# Active routing — uses MiniMax (only working key right now)
-# TODO: Restore multi-provider routing once API keys are set:
-#   default:     deepseek/deepseek-chat ($0.028/M) — cheapest workhorse
-#   coding:      openrouter/moonshot/kimi-k2.5 ($0.445/M) — 76.8% SWE-bench
-#   boilerplate: dashscope/qwen-turbo ($0.05/M)
-#   research:    gemini/gemini-2.0-flash ($0.10/M, 1M context)
-#   fast:        groq/llama-3.1-8b-instant ($0.05/M, 840 TPS)
+# Active routing — uses DashScope/Qwen (confirmed working)
+# MiniMax kept as fallback. Restore multi-provider when more keys added.
 MODEL_ROUTING = {
-    "default":     {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "coding":      {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "boilerplate": {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "research":    {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "fast":        {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "default":     {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
+    "coding":      {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
+    "boilerplate": {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
+    "research":    {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
+    "fast":        {"model": "dashscope/qwen-turbo", "cost_input": 0.003, "cost_output": 0.006},
 }
 
 # ── Model Fallback Chains ──
