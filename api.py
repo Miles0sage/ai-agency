@@ -102,7 +102,7 @@ def serve_dashboard():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "0.3.0"}
+    return {"status": "ok", "version": "0.3.1"}
 
 
 @app.get("/.well-known/agent.json")

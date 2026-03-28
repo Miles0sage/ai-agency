@@ -13,7 +13,10 @@ litellm.set_verbose = False
 
 
 def strip_thinking_tags(text: str) -> str:
-    return re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Greedy strip to handle nested/malformed think tags, then clean any orphaned openers
+    text = re.sub(r'<think>.*</think>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<think>.*', '', text, flags=re.DOTALL)
+    return text
 
 
 def get_model_for_task(task_type: str) -> str:
