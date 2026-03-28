@@ -35,3 +35,17 @@ create index if not exists idx_subtasks_stage on agency_subtasks(stage, status);
 -- RLS for new table (service role bypasses, but enable for safety)
 alter table agency_subtasks enable row level security;
 create policy if not exists "service_all_subtasks" on agency_subtasks for all using (true);
+
+-- Thompson bandit state table (agency worker)
+create table if not exists agency_bandit_state (
+  id uuid primary key default gen_random_uuid(),
+  model text not null,
+  task_type text not null,
+  successes int default 0,
+  failures int default 0,
+  updated_at timestamptz default now(),
+  unique(model, task_type)
+);
+create index if not exists idx_bandit_model_type on agency_bandit_state(model, task_type);
+alter table agency_bandit_state enable row level security;
+create policy if not exists "service_all_bandit" on agency_bandit_state for all using (true);
