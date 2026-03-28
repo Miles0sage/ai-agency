@@ -243,7 +243,7 @@ def _has_citations(output: str) -> bool:
 
 def _has_specific_findings(output: str) -> bool:
     patterns = [r'\bfinding[s]?\b', r'\bissue[s]?\b', r'\bproblem[s]?\b',
-                r'\brecommendation[s]?\b', r'\bvulnerabilit']
+                r'\brecommendation[s]?\b', r'\bvulnerabilit\w*\b']
     return any(re.search(p, output.lower()) for p in patterns)
 
 def _has_actionable_items(output: str) -> bool:
