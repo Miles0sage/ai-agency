@@ -109,7 +109,16 @@ def serve_dashboard():
 def health():
     from config import MODEL_ROUTING
     default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
-    return {"status": "ok", "version": "0.3.6", "default_model": default_model}
+    return {"status": "ok", "version": "0.3.7", "default_model": default_model}
+
+
+@app.get("/debug")
+def debug_info():
+    """Show worker thread status and recent errors."""
+    import threading
+    threads = [t.name for t in threading.enumerate()]
+    worker_alive = "agency-worker" in threads
+    return {"worker_alive": worker_alive, "threads": threads}
 
 
 @app.get("/.well-known/agent.json")

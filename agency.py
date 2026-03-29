@@ -610,11 +610,13 @@ def run_loop():
                     try:
                         process_task(task)
                     except Exception as task_err:
-                        print(f"\n[agency] CRASH processing {task.get('id','?')[:8]}: {task_err}")
+                        import traceback
+                        tb = traceback.format_exc()
+                        print(f"\n[agency] CRASH processing {task.get('id','?')[:8]}: {task_err}\n{tb}")
                         try:
                             sb_patch("tasks", task["id"], {
                                 "status": "failed",
-                                "result": json.dumps({"error": f"Worker crash: {str(task_err)[:500]}"}),
+                                "result": f"WORKER_CRASH: {str(task_err)[:300]}\n{tb[:400]}",
                             })
                         except Exception:
                             pass
