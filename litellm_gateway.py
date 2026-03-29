@@ -153,6 +153,7 @@ def call_llm(
                 except Exception:
                     continue  # try next fallback
 
+        print(f"  [llm] FAIL {model}: {error_str[:200]}")
         return {
             "success": False, "output": "", "error": error_str, "model": model,
             "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0,
