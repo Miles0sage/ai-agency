@@ -139,6 +139,7 @@ def call_llm(
             ],
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout=120,
         )
         msg = response.choices[0].message
         raw_content = msg.content or ""

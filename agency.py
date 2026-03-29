@@ -17,9 +17,51 @@ import os
 import re
 import time
 import threading
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import Optional
 import random
+
+# Per-task wall-clock timeout (seconds) by task type
+_TASK_TIMEOUTS = {
+    "coding":   5 * 60,
+    "research": 3 * 60,
+    "writing":  2 * 60,
+}
+_DEFAULT_TASK_TIMEOUT = 3 * 60  # 3 min for unknown task types
+
+
+def _get_task_timeout(task: dict) -> int:
+    """Return wall-clock timeout in seconds for a given task."""
+    return _TASK_TIMEOUTS.get(task.get("task_type", ""), _DEFAULT_TASK_TIMEOUT)
+
+
+def process_task_with_timeout(task: dict) -> str:
+    """Run process_task in a thread with a per-task wall-clock timeout.
+
+    If the task exceeds its timeout it is marked 'failed' in Supabase and
+    'timed_out' is returned so the caller can continue without blocking.
+    """
+    timeout_secs = _get_task_timeout(task)
+    timeout_mins = timeout_secs // 60
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(process_task, task)
+        try:
+            return future.result(timeout=timeout_secs)
+        except concurrent.futures.TimeoutError:
+            error_msg = f"Task timed out after {timeout_mins} minutes"
+            print(f"\n  [timeout] {task.get('id','?')[:8]}: {error_msg}")
+            try:
+                sb_patch("tasks", task["id"], {
+                    "status": "failed",
+                    "result": error_msg,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+            return "timed_out"
 
 from config import (
     SUPABASE_URL, SUPABASE_KEY, SOP_STAGES, DEPARTMENTS,
@@ -619,7 +661,7 @@ def run_loop():
                         print("[agency] Shutdown requested, exiting")
                         break
                     try:
-                        process_task(task)
+                        process_task_with_timeout(task)
                     except Exception as task_err:
                         import traceback
                         tb = traceback.format_exc()
@@ -678,7 +720,7 @@ def worker_loop(worker_id: str):
 
             if claimed_task:
                 try:
-                    process_task(claimed_task)
+                    process_task_with_timeout(claimed_task)
                     run_watchdog_sweep(SUPABASE_URL, SUPABASE_KEY, STUCK_TIMEOUT_SECONDS)
                 except Exception as task_err:
                     import traceback
