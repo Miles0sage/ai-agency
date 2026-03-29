@@ -22,5 +22,8 @@ def reset_shutdown():
 
 
 def install_signal_handlers():
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return  # Signal handlers only work in main thread
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
