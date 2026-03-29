@@ -42,12 +42,8 @@ def create_task(t: TaskIn):
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.text)
 
-    # Dispatch to Celery worker (falls back to pending queue if Redis unavailable)
-    try:
-        from celery_app import app as celery
-        celery.send_task("celery_app.process_task_async", args=[data])
-    except Exception:
-        pass  # Task stays pending — background worker or Celery will pick it up
+    # Background worker thread picks up pending tasks from Supabase.
+    # Celery dispatch disabled — was causing race conditions with bg thread.
 
     return r.json()
 
@@ -113,7 +109,7 @@ def serve_dashboard():
 def health():
     from config import MODEL_ROUTING
     default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
-    return {"status": "ok", "version": "0.3.4", "default_model": default_model}
+    return {"status": "ok", "version": "0.3.5", "default_model": default_model}
 
 
 @app.get("/.well-known/agent.json")
