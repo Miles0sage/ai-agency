@@ -63,7 +63,7 @@ def _get_provider_kwargs(model: str) -> dict:
     if model.startswith("minimax/"):
         real_model = model.replace("minimax/", "")
         return {
-            "model": f"openai/{real_model}",
+            "model": real_model,
             "api_key": os.environ.get("MINIMAX_API_KEY", ""),
             "api_base": MINIMAX_BASE,
         }
