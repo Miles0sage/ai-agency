@@ -86,6 +86,9 @@ def call_llm(
 ) -> dict:
     model = model_override or get_model_for_task(task_type)
     provider_kwargs = _get_provider_kwargs(model)
+    # Disable thinking for MiniMax models to avoid wasting tokens on <think> blocks
+    if "minimax" in model.lower():
+        prompt = f"/no_think\n{prompt}"
     try:
         response = _completion_with_retry(
             **provider_kwargs,
