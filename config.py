@@ -30,6 +30,7 @@ MODEL_FALLBACKS = {
 
 # ── Budget ──
 MAX_TASK_BUDGET_USD = float(os.environ.get("MAX_TASK_BUDGET_USD", "0.10"))
+DAILY_BUDGET_ALERT_USD = float(os.environ.get("DAILY_BUDGET_ALERT_USD", "1.00"))
 
 # ── Watchdog ──
 WATCHDOG_POLL_INTERVAL = int(os.environ.get("WATCHDOG_POLL_INTERVAL", "30"))

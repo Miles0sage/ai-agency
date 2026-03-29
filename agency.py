@@ -499,6 +499,7 @@ def process_task(task: dict) -> str:
     prev_output = ""
     final_confidence = 0.0
     final_model = get_model_for_task(task_type)
+    stage_costs = {}
 
     for stage in SOP_STAGES:
         # Budget check via enforcer
@@ -550,6 +551,11 @@ def process_task(task: dict) -> str:
             prev_output = strip_thinking_tags(stage_result["output"])
             conf_str = f"conf={stage_result['confidence']:.0%}" if stage_result["confidence"] else ""
             print(f"ok {conf_str}")
+            # Heartbeat: touch updated_at so watchdog doesn't kill active tasks
+            try:
+                sb_patch("tasks", task_id, {"updated_at": datetime.now(timezone.utc).isoformat()})
+            except Exception:
+                pass
         else:
             all_passed = False
             print(f"FAIL")
@@ -568,13 +574,15 @@ def process_task(task: dict) -> str:
 
     final_status = "completed" if all_passed else "review"
     from litellm_gateway import strip_thinking_tags
-    clean_output = strip_thinking_tags(prev_output[:800]) if prev_output else ""
+    clean_output = strip_thinking_tags(prev_output) if prev_output else ""
     sb_patch("tasks", task_id, {
         "status": final_status,
         "cost_usd": round(budget_enforcer.spent, 5),
         "result": clean_output,
         "worker_used": final_model,
+        "model_used": final_model,
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     })
     from discord_notify import notify_task_complete
     notify_task_complete(

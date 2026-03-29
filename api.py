@@ -1,16 +1,43 @@
 """AI Agency API — Submit tasks, check status, kill tasks, view dashboard."""
 from pathlib import Path
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 import os
+import time
 import requests
 import uuid
+from collections import defaultdict
 
 from config import SUPABASE_URL, SUPABASE_KEY
 from supabase_client import HEADERS as H
 from contextlib import asynccontextmanager
+
+# ── Optional API key auth ──────────────────────────────────────────────────────
+_API_KEY = os.environ.get("API_KEY", "")
+
+def require_api_key(request: Request):
+    if not _API_KEY:
+        return  # Auth disabled — no API_KEY env var set
+    key = request.headers.get("X-API-Key", "")
+    if key != _API_KEY:
+        raise HTTPException(403, "Invalid or missing X-API-Key header")
+
+# ── Simple fixed-window rate limiter (per IP, resets every 60s) ───────────────
+_rate_counts: dict = defaultdict(lambda: [0, 0.0])  # ip -> [count, window_start]
+_RATE_LIMIT = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
+
+def rate_limit(request: Request):
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    count, window_start = _rate_counts[ip]
+    if now - window_start > 60:
+        _rate_counts[ip] = [1, now]
+    else:
+        if count >= _RATE_LIMIT:
+            raise HTTPException(429, f"Rate limit: {_RATE_LIMIT} requests/min exceeded")
+        _rate_counts[ip][0] += 1
 
 
 @asynccontextmanager
@@ -37,7 +64,7 @@ class TaskIn(BaseModel):
     priority: int = 5
 
 
-@app.post("/tasks")
+@app.post("/tasks", dependencies=[Depends(rate_limit), Depends(require_api_key)])
 def create_task(t: TaskIn):
     task_id = str(uuid.uuid4())
     data = {
@@ -54,7 +81,7 @@ def create_task(t: TaskIn):
     return r.json()
 
 
-@app.delete("/tasks/{task_id}")
+@app.delete("/tasks/{task_id}", dependencies=[Depends(require_api_key)])
 def kill_task(task_id: str):
     """Kill a running task — hard stop via Celery revoke + mark failed in Supabase."""
     # Mark failed in Supabase
@@ -88,18 +115,69 @@ def list_tasks(status: str = None, limit: int = 20):
 
 @app.get("/dashboard")
 def dashboard():
-    r = requests.get(f"{SUPABASE_URL}/rest/v1/tasks?select=status,cost_usd", headers=H)
+    r = requests.get(f"{SUPABASE_URL}/rest/v1/tasks?select=status,cost_usd,created_at", headers=H)
     tasks = r.json() if r.ok else []
     if not isinstance(tasks, list):
         tasks = []
     total = len(tasks)
     by_status = {}
-    total_cost = 0
+    total_cost = 0.0
+    daily_cost = 0.0
+    today = time.strftime("%Y-%m-%d")
     for t in tasks:
-        s = t.get("status", "unknown") if isinstance(t, dict) else "unknown"
+        if not isinstance(t, dict):
+            continue
+        s = t.get("status", "unknown")
         by_status[s] = by_status.get(s, 0) + 1
-        total_cost += float(t.get("cost_usd") or 0) if isinstance(t, dict) else 0
-    return {"total_tasks": total, "by_status": by_status, "total_cost_usd": round(total_cost, 4)}
+        c = float(t.get("cost_usd") or 0)
+        total_cost += c
+        if (t.get("created_at") or "").startswith(today):
+            daily_cost += c
+
+    # Fire budget alert if daily spend exceeds threshold
+    from config import DAILY_BUDGET_ALERT_USD
+    if daily_cost >= DAILY_BUDGET_ALERT_USD:
+        from discord_notify import notify_budget_alert
+        notify_budget_alert(daily_cost, DAILY_BUDGET_ALERT_USD)
+
+    return {
+        "total_tasks": total,
+        "by_status": by_status,
+        "total_cost_usd": round(total_cost, 4),
+        "daily_cost_usd": round(daily_cost, 4),
+    }
+
+
+@app.get("/stats")
+def stats():
+    """Per-model cost and task breakdown."""
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/tasks?select=status,cost_usd,worker_used,created_at&limit=500",
+        headers=H,
+    )
+    tasks = r.json() if r.ok else []
+    if not isinstance(tasks, list):
+        tasks = []
+    today = time.strftime("%Y-%m-%d")
+    by_model: dict = {}
+    daily_cost = 0.0
+    for t in tasks:
+        if not isinstance(t, dict):
+            continue
+        model = t.get("worker_used") or "unknown"
+        c = float(t.get("cost_usd") or 0)
+        if model not in by_model:
+            by_model[model] = {"tasks": 0, "cost_usd": 0.0, "completed": 0, "failed": 0}
+        by_model[model]["tasks"] += 1
+        by_model[model]["cost_usd"] = round(by_model[model]["cost_usd"] + c, 6)
+        s = t.get("status", "")
+        if s == "completed":
+            by_model[model]["completed"] += 1
+        elif s in ("failed", "review"):
+            by_model[model]["failed"] += 1
+        if (t.get("created_at") or "").startswith(today):
+            daily_cost += c
+    return {"by_model": by_model, "daily_cost_usd": round(daily_cost, 4)}
 
 
 _DASHBOARD_HTML = Path(__file__).with_name("dashboard.html")
@@ -220,13 +298,6 @@ def webhook_trigger(source: str, payload: dict):
     r = requests.post(f"{SUPABASE_URL}/rest/v1/tasks", headers=H, json=data)
     if r.status_code >= 400:
         raise HTTPException(r.status_code, r.text)
-
-    # Dispatch to Celery (falls back to pending queue if Redis unavailable)
-    try:
-        from celery_app import app as celery
-        celery.send_task("celery_app.process_task_async", args=[data])
-    except Exception:
-        pass
 
     return {"status": "created", "task_id": task_id, "source": source}
 

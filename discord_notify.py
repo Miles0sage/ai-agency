@@ -49,3 +49,18 @@ def notify_system_event(message: str):
         )
     except Exception:
         pass
+
+
+def notify_budget_alert(daily_spend: float, threshold: float):
+    """Alert when daily spend exceeds threshold."""
+    if not DISCORD_WEBHOOK_URL:
+        return
+    embed = {
+        "title": "💸 Budget Alert",
+        "description": f"Daily spend **${daily_spend:.4f}** exceeded threshold **${threshold:.2f}**",
+        "color": 0xff4141,
+    }
+    try:
+        requests.post(DISCORD_WEBHOOK_URL, json={"embeds": [embed]}, timeout=5)
+    except Exception:
+        pass
