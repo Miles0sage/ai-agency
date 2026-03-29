@@ -66,7 +66,6 @@ def _get_provider_kwargs(model: str) -> dict:
             "model": f"openai/{real_model}",
             "api_key": os.environ.get("MINIMAX_API_KEY", ""),
             "api_base": MINIMAX_BASE,
-            "extra_body": {"reasoning_split": True},
         }
     return {"model": model}
 
@@ -82,14 +81,11 @@ def call_llm(
     system: str = "You are a helpful assistant.",
     task_type: str = "default",
     model_override: Optional[str] = None,
-    max_tokens: int = 4000,
+    max_tokens: int = 8000,
     temperature: float = 0.3,
 ) -> dict:
     model = model_override or get_model_for_task(task_type)
     provider_kwargs = _get_provider_kwargs(model)
-    # Disable thinking for MiniMax models to avoid wasting tokens on <think> blocks
-    if "minimax" in model.lower():
-        prompt = f"/no_think\n{prompt}"
     try:
         response = _completion_with_retry(
             **provider_kwargs,
