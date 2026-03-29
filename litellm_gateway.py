@@ -87,7 +87,49 @@ def call_llm(
 ) -> dict:
     model = model_override or get_model_for_task(task_type)
     provider_kwargs = _get_provider_kwargs(model)
-    print(f"  [llm] calling {provider_kwargs.get('model','?')} api_base={provider_kwargs.get('api_base','default')}")
+
+    # Direct requests call for MiniMax (LiteLLM has connection issues)
+    if model.startswith("minimax/"):
+        import requests as _req
+        real_model = model.replace("minimax/", "")
+        api_key = os.environ.get("MINIMAX_API_KEY", "")
+        try:
+            r = _req.post(
+                f"{MINIMAX_BASE}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={
+                    "model": real_model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+                timeout=120,
+            )
+            if not r.ok:
+                print(f"  [llm] MiniMax HTTP {r.status_code}: {r.text[:200]}")
+                return {"success": False, "output": "", "error": f"MiniMax {r.status_code}: {r.text[:200]}", "model": model, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+            data = r.json()
+            raw_content = data["choices"][0]["message"]["content"] or ""
+            content = strip_thinking_tags(raw_content).strip()
+            if not content and raw_content.strip():
+                import re as _re
+                think_match = _re.search(r'<think>(.*?)(?:</think>|$)', raw_content, _re.DOTALL)
+                content = think_match.group(1).strip() if think_match else raw_content.strip()
+            usage = data.get("usage", {})
+            cost_in, cost_out = get_cost_for_model(model)
+            cost_usd = (usage.get("prompt_tokens", 0) * cost_in + usage.get("completion_tokens", 0) * cost_out) / 1_000_000
+            return {
+                "success": True, "output": content, "error": "", "model": model,
+                "prompt_tokens": usage.get("prompt_tokens", 0), "completion_tokens": usage.get("completion_tokens", 0),
+                "cost_usd": round(cost_usd, 6),
+            }
+        except Exception as e:
+            print(f"  [llm] MiniMax direct FAIL: {e}")
+            return {"success": False, "output": "", "error": str(e), "model": model, "prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0}
+
     try:
         response = _completion_with_retry(
             **provider_kwargs,
