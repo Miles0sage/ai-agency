@@ -53,7 +53,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="AI Agency", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="AI Agency", version="0.5.1", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -194,7 +194,7 @@ def health():
     from config import MODEL_ROUTING
     default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
     from agency import WORKER_COUNT
-    return {"status": "ok", "version": "0.5.0", "default_model": default_model, "workers": WORKER_COUNT}
+    return {"status": "ok", "version": "0.5.1", "default_model": default_model, "workers": WORKER_COUNT}
 
 
 @app.get("/debug")
