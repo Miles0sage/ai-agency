@@ -3,7 +3,7 @@ import os
 
 # ── Supabase ──
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get("SUPABASE_KEY", "")
 if not SUPABASE_URL or not SUPABASE_KEY:
     import warnings
     warnings.warn("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. API will start but tasks will fail.")

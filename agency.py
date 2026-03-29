@@ -639,9 +639,19 @@ def run_loop():
         time.sleep(POLL_INTERVAL)
 
 
+def _safe_run_loop():
+    """Wrapper that catches and logs any crash in run_loop."""
+    try:
+        run_loop()
+    except Exception as e:
+        import traceback
+        print(f"[agency] WORKER THREAD CRASHED: {e}")
+        traceback.print_exc()
+
+
 def start_background_loop():
     """Called from api.py startup event."""
-    t = threading.Thread(target=run_loop, daemon=True, name="agency-worker")
+    t = threading.Thread(target=_safe_run_loop, daemon=True, name="agency-worker")
     t.start()
     print(f"[agency] background thread started (tid={t.ident})")
     return t
