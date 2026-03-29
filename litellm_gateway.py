@@ -63,9 +63,10 @@ def _get_provider_kwargs(model: str) -> dict:
     if model.startswith("minimax/"):
         real_model = model.replace("minimax/", "")
         return {
-            "model": real_model,
+            "model": f"openai/{real_model}",
             "api_key": os.environ.get("MINIMAX_API_KEY", ""),
             "api_base": MINIMAX_BASE,
+            "timeout": 120,
         }
     return {"model": model}
 
@@ -86,6 +87,7 @@ def call_llm(
 ) -> dict:
     model = model_override or get_model_for_task(task_type)
     provider_kwargs = _get_provider_kwargs(model)
+    print(f"  [llm] calling {provider_kwargs.get('model','?')} api_base={provider_kwargs.get('api_base','default')}")
     try:
         response = _completion_with_retry(
             **provider_kwargs,
