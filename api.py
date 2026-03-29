@@ -26,7 +26,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="AI Agency", version="0.3.1", lifespan=lifespan)
+app = FastAPI(title="AI Agency", version="0.5.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -115,7 +115,8 @@ def serve_dashboard():
 def health():
     from config import MODEL_ROUTING
     default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
-    return {"status": "ok", "version": "0.4.0", "default_model": default_model}
+    from agency import WORKER_COUNT
+    return {"status": "ok", "version": "0.5.0", "default_model": default_model, "workers": WORKER_COUNT}
 
 
 @app.get("/debug")
@@ -123,8 +124,8 @@ def debug_info():
     """Show worker thread status and recent errors."""
     import threading
     threads = [t.name for t in threading.enumerate()]
-    worker_alive = "agency-worker" in threads
-    return {"worker_alive": worker_alive, "threads": threads}
+    workers = [t for t in threads if t.startswith("agency-worker")]
+    return {"workers_alive": len(workers), "worker_threads": workers, "all_threads": threads}
 
 
 @app.get("/.well-known/agent.json")

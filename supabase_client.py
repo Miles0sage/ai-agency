@@ -47,3 +47,20 @@ def sb_patch(table: str, row_id: str, data: dict) -> Optional[dict]:
     except Exception as e:
         print(f"[supabase] PATCH {table}/{row_id}: {e}")
         return None
+
+
+def sb_claim(task_id: str, worker_id: str) -> bool:
+    """Atomically claim a pending task (CAS: status pending→in_progress).
+    Returns True only if this worker won the race. Safe for concurrent workers."""
+    try:
+        r = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/tasks?id=eq.{task_id}&status=eq.pending",
+            headers=HEADERS,
+            json={"status": "in_progress", "worker_used": worker_id},
+            timeout=10,
+        )
+        result = r.json()
+        return isinstance(result, list) and len(result) > 0
+    except Exception as e:
+        print(f"[supabase] CLAIM {task_id}: {e}")
+        return False

@@ -9,23 +9,23 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     warnings.warn("SUPABASE_URL and SUPABASE_SERVICE_KEY must be set. API will start but tasks will fail.")
 
 # ── LiteLLM Model Routing Table ──
-# Active routing — MiniMax confirmed working (DashScope key expired)
+# Cost-optimised: DeepSeek V3 primary ($0.27/$1.10 per M), Groq for fast/cheap
+# MiniMax as fallback (was primary — kept in fallback chain)
 MODEL_ROUTING = {
-    "default":     {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "coding":      {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "boilerplate": {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "research":    {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
-    "fast":        {"model": "minimax/MiniMax-M2.7", "cost_input": 0.15, "cost_output": 1.20},
+    "default":     {"model": "deepseek/deepseek-chat",        "cost_input": 0.27,  "cost_output": 1.10},
+    "coding":      {"model": "deepseek/deepseek-chat",        "cost_input": 0.27,  "cost_output": 1.10},
+    "research":    {"model": "deepseek/deepseek-chat",        "cost_input": 0.27,  "cost_output": 1.10},
+    "boilerplate": {"model": "groq/llama-3.3-70b-versatile",  "cost_input": 0.59,  "cost_output": 0.79},
+    "fast":        {"model": "groq/llama-3.1-8b-instant",     "cost_input": 0.05,  "cost_output": 0.08},
 }
 
 # ── Model Fallback Chains ──
-# If primary model fails, try fallbacks in order
 MODEL_FALLBACKS = {
-    "minimax/MiniMax-M2.7": ["dashscope/qwen-turbo", "groq/llama-3.1-8b-instant"],
-    "deepseek/deepseek-chat": ["minimax/MiniMax-M2.7", "groq/llama-3.1-8b-instant"],
-    "openrouter/moonshot/kimi-k2.5": ["minimax/MiniMax-M2.7", "deepseek/deepseek-chat"],
-    "gemini/gemini-2.0-flash": ["minimax/MiniMax-M2.7", "deepseek/deepseek-chat"],
-    "groq/llama-3.1-8b-instant": ["minimax/MiniMax-M2.7", "dashscope/qwen-turbo"],
+    "deepseek/deepseek-chat":         ["minimax/MiniMax-M2.7", "groq/llama-3.3-70b-versatile"],
+    "groq/llama-3.3-70b-versatile":   ["deepseek/deepseek-chat", "minimax/MiniMax-M2.7"],
+    "groq/llama-3.1-8b-instant":      ["groq/llama-3.3-70b-versatile", "deepseek/deepseek-chat"],
+    "minimax/MiniMax-M2.7":           ["deepseek/deepseek-chat", "groq/llama-3.3-70b-versatile"],
+    "gemini/gemini-2.0-flash":        ["deepseek/deepseek-chat", "minimax/MiniMax-M2.7"],
 }
 
 # ── Budget ──

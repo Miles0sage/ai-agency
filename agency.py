@@ -25,6 +25,8 @@ from config import (
     MAX_TASK_BUDGET_USD, STUCK_TIMEOUT_SECONDS,
     POLL_INTERVAL, MAX_RETRIES, MAX_SUBTASKS,
 )
+
+WORKER_COUNT = int(os.environ.get("WORKER_COUNT", "3"))
 from litellm_gateway import call_llm, get_model_for_task
 from budget import BudgetEnforcer, BudgetExhaustedError
 from kill_switch import should_exit, install_signal_handlers
@@ -649,12 +651,77 @@ def _safe_run_loop():
         traceback.print_exc()
 
 
+def worker_loop(worker_id: str):
+    """Per-thread worker loop with atomic task claiming. Safe to run N concurrently."""
+    from supabase_client import sb_claim
+    print(f"[{worker_id}] started")
+    consecutive_errors = 0
+
+    while not should_exit():
+        try:
+            # Fetch candidates — more than we need to handle claim races
+            tasks = sb_get("tasks?status=eq.pending&order=priority.desc,created_at.asc&limit=10")
+            claimed_task = None
+            for task in (tasks or []):
+                if sb_claim(task["id"], worker_id):
+                    claimed_task = task
+                    break
+
+            if claimed_task:
+                try:
+                    process_task(claimed_task)
+                    run_watchdog_sweep(SUPABASE_URL, SUPABASE_KEY, STUCK_TIMEOUT_SECONDS)
+                except Exception as task_err:
+                    import traceback
+                    tb = traceback.format_exc()
+                    print(f"\n[{worker_id}] CRASH {claimed_task.get('id','?')[:8]}: {task_err}\n{tb}")
+                    try:
+                        sb_patch("tasks", claimed_task["id"], {
+                            "status": "failed",
+                            "result": f"WORKER_CRASH: {str(task_err)[:300]}\n{tb[:400]}",
+                        })
+                    except Exception:
+                        pass
+                consecutive_errors = 0
+            else:
+                print(".", end="", flush=True)
+                time.sleep(POLL_INTERVAL)
+                consecutive_errors = 0
+
+        except Exception as e:
+            consecutive_errors += 1
+            print(f"\n[{worker_id}] error #{consecutive_errors}: {e}")
+            if consecutive_errors >= 5:
+                print(f"[{worker_id}] too many errors -- backing off 60s")
+                time.sleep(60)
+                consecutive_errors = 0
+            else:
+                time.sleep(5)
+
+
+def _safe_worker_loop(worker_id: str):
+    try:
+        worker_loop(worker_id)
+    except Exception as e:
+        import traceback
+        print(f"[{worker_id}] THREAD CRASHED: {e}")
+        traceback.print_exc()
+
+
 def start_background_loop():
-    """Called from api.py startup event."""
-    t = threading.Thread(target=_safe_run_loop, daemon=True, name="agency-worker")
-    t.start()
-    print(f"[agency] background thread started (tid={t.ident})")
-    return t
+    """Start WORKER_COUNT concurrent worker threads, each with atomic task claiming."""
+    import uuid
+    threads = []
+    for i in range(WORKER_COUNT):
+        worker_id = f"worker-{i+1}-{uuid.uuid4().hex[:6]}"
+        t = threading.Thread(
+            target=_safe_worker_loop, args=(worker_id,),
+            daemon=True, name=f"agency-worker-{i+1}",
+        )
+        t.start()
+        threads.append(t)
+        print(f"[agency] started {worker_id} (tid={t.ident})")
+    return threads
 
 
 if __name__ == "__main__":
