@@ -100,8 +100,16 @@ def call_llm(
             max_tokens=max_tokens,
             temperature=temperature,
         )
-        content = response.choices[0].message.content or ""
+        msg = response.choices[0].message
+        content = msg.content or ""
+        # If reasoning_split worked, content is clean. If not, strip tags.
         content = strip_thinking_tags(content).strip()
+        # Fallback: if content empty, check for reasoning_content or raw model_extra
+        if not content:
+            extra = getattr(msg, 'model_extra', {}) or {}
+            reasoning = extra.get('reasoning_content', '') or extra.get('reasoning_details', '') or ''
+            if reasoning:
+                content = strip_thinking_tags(reasoning).strip()
         prompt_tokens = response.usage.prompt_tokens if response.usage else 0
         completion_tokens = response.usage.completion_tokens if response.usage else 0
         cost_in, cost_out = get_cost_for_model(model)
