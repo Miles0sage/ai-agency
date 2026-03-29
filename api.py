@@ -50,6 +50,12 @@ async def lifespan(app):
         print(f"[lifespan] FAILED to start worker: {e}")
         import traceback
         traceback.print_exc()
+    try:
+        from watchdog_selfheal import start_watchdog
+        start_watchdog()
+        print("[lifespan] Self-heal watchdog started OK")
+    except Exception as e:
+        print(f"[lifespan] FAILED to start watchdog: {e}")
     yield
 
 
