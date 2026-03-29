@@ -15,8 +15,14 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
-    from agency import start_background_loop
-    start_background_loop()
+    try:
+        from agency import start_background_loop
+        start_background_loop()
+        print("[lifespan] Worker thread started OK")
+    except Exception as e:
+        print(f"[lifespan] FAILED to start worker: {e}")
+        import traceback
+        traceback.print_exc()
     yield
 
 
@@ -109,7 +115,7 @@ def serve_dashboard():
 def health():
     from config import MODEL_ROUTING
     default_model = MODEL_ROUTING.get("default", {}).get("model", "unknown")
-    return {"status": "ok", "version": "0.3.7", "default_model": default_model}
+    return {"status": "ok", "version": "0.4.0", "default_model": default_model}
 
 
 @app.get("/debug")

@@ -66,6 +66,7 @@ def _get_provider_kwargs(model: str) -> dict:
             "model": f"openai/{real_model}",
             "api_key": os.environ.get("MINIMAX_API_KEY", ""),
             "api_base": MINIMAX_BASE,
+            "extra_body": {"reasoning_split": True},
         }
     return {"model": model}
 
